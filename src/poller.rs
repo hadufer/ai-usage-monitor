@@ -131,6 +131,27 @@ fn cli_refresh_wsl_token(distro: &str) {
     wait_for_refresh(&mut child);
 }
 
+/// Spawn a command and wait up to `timeout` for it to finish.
+/// Returns None if the process fails to start or exceeds the deadline.
+fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<std::process::Output> {
+    let mut child = cmd.spawn().ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
 fn wait_for_refresh(child: &mut std::process::Child) {
     // Wait up to 30 seconds; don't block the poll thread forever.
     let start = std::time::Instant::now();
@@ -382,18 +403,19 @@ fn read_credentials_from_source(source: &CredentialSource) -> Option<Credentials
 }
 
 fn read_wsl_credentials(distro: &str) -> Option<Credentials> {
-    let output = Command::new("wsl.exe")
-        .arg("-d")
-        .arg(distro)
-        .arg("--")
-        .arg("sh")
-        .arg("-lc")
-        .arg("cat ~/.claude/.credentials.json")
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let output = run_with_timeout(
+        Command::new("wsl.exe")
+            .arg("-d")
+            .arg(distro)
+            .arg("--")
+            .arg("sh")
+            .arg("-lc")
+            .arg("cat ~/.claude/.credentials.json")
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null()),
+        Duration::from_secs(5),
+    )?;
 
     if !output.status.success() {
         return None;
@@ -435,14 +457,15 @@ fn choose_best_credentials(mut candidates: Vec<Credentials>) -> Option<Credentia
 }
 
 fn list_wsl_distros() -> Vec<String> {
-    let output = match Command::new("wsl.exe")
-        .args(["-l", "-q"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
-        Ok(output) if output.status.success() => output,
+    let output = match run_with_timeout(
+        Command::new("wsl.exe")
+            .args(["-l", "-q"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null()),
+        Duration::from_secs(5),
+    ) {
+        Some(output) if output.status.success() => output,
         _ => return Vec::new(),
     };
 
