@@ -253,6 +253,23 @@ fn show_error_message(hwnd: HWND, title: &str, message: &str) {
     }
 }
 
+fn show_update_prompt(hwnd: HWND, strings: Strings, release: &ReleaseDescriptor) -> bool {
+    let message = strings
+        .update_prompt_now
+        .replace("{version}", &release.latest_version);
+
+    unsafe {
+        let title_wide = native_interop::wide_str(strings.update_available);
+        let message_wide = native_interop::wide_str(&message);
+        MessageBoxW(
+            hwnd,
+            PCWSTR::from_raw(message_wide.as_ptr()),
+            PCWSTR::from_raw(title_wide.as_ptr()),
+            MB_YESNO | MB_ICONQUESTION,
+        ) == IDYES
+    }
+}
+
 fn apply_language_to_state(state: &mut AppState, language_override: Option<LanguageId>) {
     state.language_override = language_override;
     state.language = localization::resolve_language(language_override);
@@ -347,8 +364,11 @@ fn begin_update_check(hwnd: HWND) {
                 {
                     let mut state = lock_state();
                     if let Some(s) = state.as_mut() {
-                        s.update_status = UpdateStatus::Available(release);
+                        s.update_status = UpdateStatus::Available(release.clone());
                     }
+                }
+                if show_update_prompt(hwnd, strings, &release) {
+                    begin_update_apply(hwnd, release);
                 }
                 unsafe {
                     let _ = PostMessageW(hwnd, WM_APP_UPDATE_CHECK_COMPLETE, WPARAM(0), LPARAM(0));

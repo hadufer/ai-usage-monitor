@@ -108,6 +108,8 @@ pub struct Strings {
     pub update_failed: &'static str,
     pub applying_update: &'static str,
     pub update_to: &'static str,
+    pub update_available: &'static str,
+    pub update_prompt_now: &'static str,
     pub exit: &'static str,
     pub session_window: &'static str,
     pub weekly_window: &'static str,

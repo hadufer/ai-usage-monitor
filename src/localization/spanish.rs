@@ -24,6 +24,8 @@ pub(super) const STRINGS: Strings = Strings {
     update_failed: "No se pudo actualizar automáticamente",
     applying_update: "Aplicando actualización...",
     update_to: "Actualizar a",
+    update_available: "Actualización disponible",
+    update_prompt_now: "La versión {version} está disponible. ¿Quieres actualizar ahora?",
     exit: "Salir",
     session_window: "5h",
     weekly_window: "7d",

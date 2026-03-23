@@ -24,6 +24,8 @@ pub(super) const STRINGS: Strings = Strings {
     update_failed: "自動更新を完了できませんでした",
     applying_update: "更新を適用しています...",
     update_to: "更新先",
+    update_available: "更新が利用可能です",
+    update_prompt_now: "バージョン {version} が利用可能です。今すぐ更新しますか？",
     exit: "終了",
     session_window: "5h",
     weekly_window: "7d",
