@@ -15,6 +15,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::UsageData;
 use crate::native_interop::{
@@ -599,6 +600,7 @@ pub fn run() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         CURRENT_DPI.store(GetDpiForSystem(), Ordering::Relaxed);
     }
+    diagnose::log("window::run started");
 
     // Single-instance guard: silently exit if another instance is running
     let mutex_name = native_interop::wide_str("Global\\ClaudeCodeUsageMonitor");
@@ -607,11 +609,15 @@ pub fn run() {
         match handle {
             Ok(h) => {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
+                    diagnose::log("startup aborted: another instance is already running");
                     return;
                 }
                 h
             }
-            Err(_) => return,
+            Err(error) => {
+                diagnose::log_error("startup aborted: unable to create single-instance mutex", error);
+                return;
+            }
         }
     };
 
@@ -631,7 +637,10 @@ pub fn run() {
             ..Default::default()
         };
 
-        RegisterClassExW(&wc);
+        let atom = RegisterClassExW(&wc);
+        if atom == 0 {
+            diagnose::log("RegisterClassExW returned 0");
+        }
 
         let settings = load_settings();
         let language_override = settings.language.as_deref().and_then(LanguageId::from_code);
@@ -655,6 +664,7 @@ pub fn run() {
             None,
         )
         .unwrap();
+        diagnose::log(format!("main window created hwnd={:?}", hwnd));
 
         let is_dark = theme::is_dark_mode();
         let mut embedded = false;
@@ -689,6 +699,7 @@ pub fn run() {
 
         // Try to embed in taskbar
         if let Some(taskbar_hwnd) = native_interop::find_taskbar() {
+            diagnose::log(format!("taskbar found hwnd={:?}", taskbar_hwnd));
             native_interop::embed_in_taskbar(hwnd, taskbar_hwnd);
             embedded = true;
 
@@ -699,12 +710,24 @@ pub fn run() {
 
             let tray_notify = native_interop::find_child_window(taskbar_hwnd, "TrayNotifyWnd");
             s.tray_notify_hwnd = tray_notify;
+            if tray_notify.is_some() {
+                diagnose::log("TrayNotifyWnd found");
+            } else {
+                diagnose::log("TrayNotifyWnd not found");
+            }
 
             if let Some(tray_hwnd) = tray_notify {
                 let thread_id = native_interop::get_window_thread_id(tray_hwnd);
                 let hook = native_interop::set_tray_event_hook(thread_id, on_tray_location_changed);
                 s.win_event_hook = hook;
+                if hook.is_some() {
+                    diagnose::log("tray event hook installed");
+                } else {
+                    diagnose::log("tray event hook could not be installed");
+                }
             }
+        } else {
+            diagnose::log("taskbar not found; using fallback popup window");
         }
 
         // If not embedded, fall back to topmost popup with SetLayeredWindowAttributes
@@ -724,6 +747,7 @@ pub fn run() {
         // Position and show
         position_at_taskbar();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        diagnose::log("window shown");
 
         // Initial render via UpdateLayeredWindow (for embedded) or InvalidateRect (fallback)
         render_layered();
@@ -741,6 +765,7 @@ pub fn run() {
         // Initial poll
         let send_hwnd = SendHwnd::from_hwnd(hwnd);
         std::thread::spawn(move || {
+            diagnose::log("initial poll thread started");
             do_poll(send_hwnd);
         });
 
@@ -1182,12 +1207,18 @@ fn position_at_taskbar() {
 
     let taskbar_hwnd = match s.taskbar_hwnd {
         Some(h) => h,
-        None => return,
+        None => {
+            diagnose::log("position_at_taskbar skipped: no taskbar handle");
+            return;
+        }
     };
 
     let taskbar_rect = match native_interop::get_taskbar_rect(taskbar_hwnd) {
         Some(r) => r,
-        None => return,
+        None => {
+            diagnose::log("position_at_taskbar skipped: unable to query taskbar rect");
+            return;
+        }
     };
 
     let taskbar_height = taskbar_rect.bottom - taskbar_rect.top;
@@ -1207,11 +1238,17 @@ fn position_at_taskbar() {
         let x = tray_left - taskbar_rect.left - widget_width - tray_offset;
         let y = (taskbar_height - widget_height) / 2;
         native_interop::move_window(hwnd, x, y, widget_width, widget_height);
+        diagnose::log(format!(
+            "positioned embedded widget at x={x} y={y} w={widget_width} h={widget_height}"
+        ));
     } else {
         // Topmost popup: screen coordinates
         let x = tray_left - widget_width - tray_offset;
         let y = taskbar_rect.top + (taskbar_height - widget_height) / 2;
         native_interop::move_window(hwnd, x, y, widget_width, widget_height);
+        diagnose::log(format!(
+            "positioned fallback widget at x={x} y={y} w={widget_width} h={widget_height}"
+        ));
     }
 }
 

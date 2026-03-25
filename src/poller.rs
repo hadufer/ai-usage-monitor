@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use std::os::windows::process::CommandExt;
 
+use crate::diagnose;
 use crate::localization::Strings;
 use crate::models::{UsageData, UsageSection};
 
@@ -36,7 +37,10 @@ struct UsageBucket {
 pub fn poll() -> Result<UsageData, PollError> {
     let mut creds = match read_credentials() {
         Some(c) => c,
-        None => return Err(PollError::NoCredentials),
+        None => {
+            diagnose::log("poll failed: no Claude credentials found");
+            return Err(PollError::NoCredentials);
+        }
     };
 
     if is_token_expired(creds.expires_at) {
@@ -44,10 +48,14 @@ pub fn poll() -> Result<UsageData, PollError> {
 
         match read_credentials_from_source(&creds.source) {
             Some(refreshed) => creds = refreshed,
-            None => return Err(PollError::NoCredentials),
+            None => {
+                diagnose::log("poll failed: credentials still unavailable after refresh attempt");
+                return Err(PollError::NoCredentials);
+            }
         }
 
         if is_token_expired(creds.expires_at) {
+            diagnose::log("poll failed: token is still expired after refresh attempt");
             return Err(PollError::TokenExpired);
         }
     }
@@ -67,6 +75,9 @@ fn cli_refresh_token(source: &CredentialSource) {
 fn cli_refresh_windows_token() {
     let claude_path = resolve_windows_claude_path();
     let is_cmd = claude_path.to_lowercase().ends_with(".cmd");
+    diagnose::log(format!(
+        "attempting Windows Claude token refresh via {claude_path}"
+    ));
 
     let args: &[&str] = &["-p", "."];
 
@@ -88,7 +99,10 @@ fn cli_refresh_windows_token() {
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(error) => {
+            diagnose::log_error("unable to spawn Windows Claude token refresh", error);
+            return;
+        }
     };
 
     // Wait up to 30 seconds — don't block the poll thread forever
@@ -109,6 +123,9 @@ fn cli_refresh_windows_token() {
 }
 
 fn cli_refresh_wsl_token(distro: &str) {
+    diagnose::log(format!(
+        "attempting WSL Claude token refresh in distro {distro}"
+    ));
     let mut cmd = Command::new("wsl.exe");
     cmd.arg("-d")
         .arg(distro)
@@ -125,7 +142,10 @@ fn cli_refresh_wsl_token(distro: &str) {
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(error) => {
+            diagnose::log_error("unable to spawn WSL Claude token refresh", error);
+            return;
+        }
     };
 
     wait_for_refresh(&mut child);
@@ -234,7 +254,11 @@ fn fetch_usage_with_fallback(token: &str) -> Result<UsageData, PollError> {
     }
 
     // Fall back to Messages API with rate limit headers
-    fetch_usage_via_messages(token)
+    let result = fetch_usage_via_messages(token);
+    if result.is_err() {
+        diagnose::log("usage endpoint and Messages API fallback both failed");
+    }
+    result
 }
 
 fn try_usage_endpoint(token: &str) -> Option<UsageData> {
@@ -388,7 +412,18 @@ fn read_credentials() -> Option<Credentials> {
 fn read_windows_credentials() -> Option<Credentials> {
     let home = dirs::home_dir()?;
     let cred_path = home.join(".claude").join(".credentials.json");
-    let content = std::fs::read_to_string(&cred_path).ok()?;
+    let content = match std::fs::read_to_string(&cred_path) {
+        Ok(content) => content,
+        Err(error) => {
+            if diagnose::is_enabled() {
+                diagnose::log_error(
+                    &format!("unable to read Windows credentials at {}", cred_path.display()),
+                    error,
+                );
+            }
+            return None;
+        }
+    };
     parse_credentials(&content, CredentialSource::Windows(cred_path))
 }
 
@@ -418,6 +453,10 @@ fn read_wsl_credentials(distro: &str) -> Option<Credentials> {
     )?;
 
     if !output.status.success() {
+        diagnose::log(format!(
+            "WSL credentials probe failed for distro {distro} with status {}",
+            output.status
+        ));
         return None;
     }
 
@@ -466,7 +505,10 @@ fn list_wsl_distros() -> Vec<String> {
         Duration::from_secs(5),
     ) {
         Some(output) if output.status.success() => output,
-        _ => return Vec::new(),
+        _ => {
+            diagnose::log("unable to enumerate WSL distros");
+            return Vec::new();
+        }
     };
 
     let stdout = decode_wsl_text(&output.stdout);
