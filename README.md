@@ -32,22 +32,41 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 
 ## Install
 
-For now, download the latest `claude-code-usage-monitor.exe` from the [Releases](../../releases) page and run it.
-
-WinGet support is on the way and currently waiting on final approval. When that is live, installation will be a one-liner.
-
-Planned command:
+Install the latest version from WinGet:
 
 ```powershell
 winget install CodeZeno.ClaudeCodeUsageMonitor
 ```
 
+If you prefer not to use WinGet, you can still download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases) page and run it directly.
+
 ## Use
 
-Run the app and it will appear in your taskbar.
+After installing with WinGet, run:
+
+```powershell
+claude-code-usage-monitor
+```
+
+Once running, it will appear in your taskbar.
 
 - Drag the left divider to move it
-- Right-click for refresh, update frequency, start with Windows, reset position, language, updates, and exit
+- Right-click for refresh, update frequency, Start with Windows, reset position, language, updates, and exit
+- Enable `Start with Windows` from the right-click menu if you want it to launch automatically when you sign in
+
+## Diagnostics
+
+If you need to troubleshoot startup or visibility issues, run:
+
+```powershell
+claude-code-usage-monitor --diagnose
+```
+
+This writes a log file to:
+
+```text
+%TEMP%\claude-code-usage-monitor.log
+```
 
 Settings are saved to:
 
