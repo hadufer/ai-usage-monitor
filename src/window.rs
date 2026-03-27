@@ -1309,10 +1309,14 @@ fn position_at_taskbar() {
 
     let taskbar_height = taskbar_rect.bottom - taskbar_rect.top;
     let mut tray_left = taskbar_rect.right;
+    let mut anchor_top = taskbar_rect.top;
+    let mut anchor_height = taskbar_height;
 
     if let Some(tray_hwnd) = native_interop::find_child_window(taskbar_hwnd, "TrayNotifyWnd") {
         if let Some(tray_rect) = native_interop::get_window_rect_safe(tray_hwnd) {
             tray_left = tray_rect.left;
+            anchor_top = tray_rect.top;
+            anchor_height = tray_rect.bottom - tray_rect.top;
         }
     }
 
@@ -1322,7 +1326,7 @@ fn position_at_taskbar() {
     if embedded {
         // Child window: coordinates relative to parent (taskbar)
         let x = tray_left - taskbar_rect.left - widget_width - tray_offset;
-        let y = (taskbar_height - widget_height) / 2;
+        let y = (anchor_top - taskbar_rect.top) + (anchor_height - widget_height) / 2;
         native_interop::move_window(hwnd, x, y, widget_width, widget_height);
         diagnose::log(format!(
             "positioned embedded widget at x={x} y={y} w={widget_width} h={widget_height}"
@@ -1330,7 +1334,7 @@ fn position_at_taskbar() {
     } else {
         // Topmost popup: screen coordinates
         let x = tray_left - widget_width - tray_offset;
-        let y = taskbar_rect.top + (taskbar_height - widget_height) / 2;
+        let y = anchor_top + (anchor_height - widget_height) / 2;
         native_interop::move_window(hwnd, x, y, widget_width, widget_height);
         diagnose::log(format!(
             "positioned fallback widget at x={x} y={y} w={widget_width} h={widget_height}"
@@ -1556,19 +1560,24 @@ unsafe extern "system" fn wnd_proc(
                     if let Some(taskbar_rect) = native_interop::get_taskbar_rect(taskbar_hwnd) {
                         let taskbar_height = taskbar_rect.bottom - taskbar_rect.top;
                         let mut tray_left = taskbar_rect.right;
+                        let mut anchor_top = taskbar_rect.top;
+                        let mut anchor_height = taskbar_height;
                         if let Some(tray_hwnd) =
                             native_interop::find_child_window(taskbar_hwnd, "TrayNotifyWnd")
                         {
                             if let Some(tray_rect) = native_interop::get_window_rect_safe(tray_hwnd)
                             {
                                 tray_left = tray_rect.left;
+                                anchor_top = tray_rect.top;
+                                anchor_height = tray_rect.bottom - tray_rect.top;
                             }
                         }
                         let widget_width = total_widget_width();
                         let widget_height = sc(WIDGET_HEIGHT);
                         if s.embedded {
                             let x = tray_left - taskbar_rect.left - widget_width - new_offset;
-                            let y = (taskbar_height - widget_height) / 2;
+                            let y =
+                                (anchor_top - taskbar_rect.top) + (anchor_height - widget_height) / 2;
                             native_interop::move_window(
                                 hwnd_val,
                                 x,
@@ -1578,7 +1587,7 @@ unsafe extern "system" fn wnd_proc(
                             );
                         } else {
                             let x = tray_left - widget_width - new_offset;
-                            let y = taskbar_rect.top + (taskbar_height - widget_height) / 2;
+                            let y = anchor_top + (anchor_height - widget_height) / 2;
                             native_interop::move_window(
                                 hwnd_val,
                                 x,
