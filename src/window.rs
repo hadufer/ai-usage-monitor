@@ -2043,7 +2043,7 @@ fn show_context_menu(hwnd: HWND) {
             PCWSTR::from_raw(settings_label.as_ptr()),
         );
 
-        let widget_label = native_interop::wide_str("Show Widget");
+        let widget_label = native_interop::wide_str(strings.show_widget);
         let widget_flags = if widget_visible { MF_CHECKED } else { MENU_ITEM_FLAGS(0) };
         let _ = AppendMenuW(
             menu,
