@@ -119,6 +119,7 @@ const IDM_LANG_GERMAN: u16 = 45;
 const IDM_LANG_JAPANESE: u16 = 46;
 const IDM_LANG_KOREAN: u16 = 47;
 const IDM_LANG_TRADITIONAL_CHINESE: u16 = 48;
+const IDM_LANG_RUSSIAN: u16 = 49;
 const IDM_MODEL_CLAUDE_CODE: u16 = 60;
 const IDM_MODEL_CODEX: u16 = 61;
 
@@ -2480,6 +2481,7 @@ fn show_context_menu(hwnd: HWND) {
                 LanguageId::Japanese => IDM_LANG_JAPANESE,
                 LanguageId::Korean => IDM_LANG_KOREAN,
                 LanguageId::TraditionalChinese => IDM_LANG_TRADITIONAL_CHINESE,
+                LanguageId::Russian => IDM_LANG_RUSSIAN
             };
             let label_str = native_interop::wide_str(language.native_name());
             let flags = if language_override == Some(language) {
