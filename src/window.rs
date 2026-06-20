@@ -1119,7 +1119,7 @@ fn codex_accent_color(is_dark: bool) -> Color {
 }
 
 fn antigravity_accent_color() -> Color {
-    Color::from_hex("#34A853")
+    Color::from_hex("#4285F4")
 }
 
 fn claude_usage_text_color(is_dark: bool) -> Color {
@@ -1140,9 +1140,9 @@ fn codex_usage_text_color(is_dark: bool) -> Color {
 
 fn antigravity_usage_text_color(is_dark: bool) -> Color {
     if is_dark {
-        Color::from_hex("#6FD58D")
+        Color::from_hex("#8AB4F8")
     } else {
-        Color::from_hex("#1E7D41")
+        Color::from_hex("#1967D2")
     }
 }
 

@@ -97,7 +97,7 @@ fn antigravity_fill(percent: f64) -> Color {
     if percent >= 90.0 {
         Color::from_hex("#FFFFFF")
     } else {
-        Color::from_hex("#34A853")
+        Color::from_hex("#4285F4")
     }
 }
 
@@ -130,14 +130,14 @@ pub fn create_icon(kind: TrayIconKind, percent: Option<f64>) -> HICON {
         TrayIconKind::Claude => Color::from_hex("#FFFFFF"),
         TrayIconKind::Codex if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#111111"),
         TrayIconKind::Codex => Color::from_hex("#FFFFFF"),
-        TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1E7D41"),
+        TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1967D2"),
         TrayIconKind::Antigravity => Color::from_hex("#FFFFFF"),
     };
     let outline_col = match kind {
         TrayIconKind::Claude => fill,
         TrayIconKind::Codex if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#111111"),
         TrayIconKind::Codex => Color::from_hex("#FFFFFF"),
-        TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1E7D41"),
+        TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1967D2"),
         TrayIconKind::Antigravity => Color::from_hex("#FFFFFF"),
     };
 

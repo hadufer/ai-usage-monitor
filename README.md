@@ -81,7 +81,7 @@ The tray icon shows your current 5-hour usage as a percentage badge.
 
 If multiple providers are enabled, the app shows one tray icon per provider. If only one model is enabled, it shows one tray icon.
 
-The Claude Code tray icon uses the same warm usage colors as the Claude bar. The Codex tray icon uses a black and white badge style. The Antigravity tray icon uses a green badge style.
+The Claude Code tray icon uses the same warm usage colors as the Claude bar. The Codex tray icon uses a black and white badge style. The Antigravity tray icon uses a blue badge style.
 
 Hovering over a tray icon shows the usage values for that model.
 
