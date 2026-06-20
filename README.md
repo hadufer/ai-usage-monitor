@@ -14,12 +14,13 @@ It sits in your taskbar and shows how much of your Claude Code, Codex, and/or An
 - A **5h** bar for your current 5-hour Claude usage window
 - A **7d** bar for your current 7-day window
 - Optional Codex usage bars alongside Claude Code
-- Optional Antigravity usage bars for Google's 5-hour and broader user quota windows
+- Optional Antigravity model usage bars for Google's 5-hour and weekly Gemini quota windows
 - A live countdown until each limit resets
 - A small native widget that lives directly in the Windows taskbar
 - System tray icon badges showing your enabled model usage percentage
 - Left-click the tray icon to toggle the taskbar widget on or off
-- Right-click options for refresh, displayed models, update frequency, language, startup, and updates
+- Right-click options for refresh, displayed models, update frequency, language, startup, widget visibility, and updates
+- Multi-monitor taskbar placement, so the widget can live on the taskbar for the screen you prefer
 
 ## Who This Is For
 
@@ -27,7 +28,7 @@ This app is for Windows users who already have **Claude Code (CLI or App) instal
 
 Codex support is optional. To show Codex usage, install and sign in to the Codex CLI, then enable Codex from the right-click **Models** menu.
 
-Antigravity support is optional too. To show Antigravity usage, install and sign in to Google Antigravity, then enable Antigravity from the right-click **Models** menu.
+Antigravity support is optional too. To show Antigravity usage, install and sign in to Google Antigravity, then enable the **Antigravity** model from the right-click **Models** menu.
 
 It works best if you want a simple "how close am I to the limit?" display that is always visible.
 
@@ -61,6 +62,7 @@ claude-code-usage-monitor
 Once running, it will appear in your taskbar and as one or more tray icons in the notification area.
 
 - Drag the left divider to move the taskbar widget
+- On multi-monitor setups, drag the widget onto another Windows taskbar to move it to that screen
 - Right-click the taskbar widget or tray icon for refresh, displayed models, update frequency, Start with Windows, reset position, language, updates, and exit
 - Left-click the tray icon to toggle the taskbar widget on or off
 - Enable `Start with Windows` from the right-click menu if you want it to launch automatically when you sign in
@@ -71,9 +73,9 @@ Use the right-click **Models** menu to choose what the widget displays:
 
 - **Claude Code** is enabled by default
 - **Codex** can be enabled alongside Claude Code or shown by itself
-- **Antigravity** can be enabled alongside the other providers or shown by itself
+- **Antigravity** can be enabled alongside the other providers or shown by itself as its own model column
 
-When multiple models are shown, each model has its own usage bar and matching usage text color.
+When multiple models are shown, each model has its own usage bar and matching usage text color. Antigravity prefers Google's Gemini quota summary when available and falls back to model quota data when needed.
 
 ### System Tray Icon
 
@@ -138,6 +140,8 @@ What the app sends over the network:
 What the app stores locally:
 
 - Widget position
+- Selected taskbar / screen
+- Widget visibility
 - Polling frequency
 - Language preference
 - Last update check time
@@ -166,7 +170,8 @@ The monitor:
 1. Finds your enabled model login credentials
 2. Reads your current usage from Anthropic, ChatGPT, and/or Google's Antigravity endpoints
 3. Shows the result directly in the Windows taskbar
-4. Refreshes periodically in the background
+4. Keeps the widget aligned with the selected taskbar and tray area
+5. Refreshes periodically in the background
 
 If the newer usage endpoint is unavailable, it can fall back to reading the rate-limit headers returned by Claude's Messages API.
 
