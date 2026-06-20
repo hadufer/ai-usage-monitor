@@ -16,7 +16,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const MODEL_FALLBACK_CHAIN: &[&str] = &["claude-3-haiku-20240307", "claude-haiku-4-5-20251001"];
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PollError {
     AuthRequired,
     NoCredentials,
@@ -73,22 +73,44 @@ struct CodexRateLimitWindow {
 }
 
 pub fn poll(show_claude_code: bool, show_codex: bool) -> Result<AppUsageData, PollError> {
+    poll_with(show_claude_code, show_codex, poll_claude_code, poll_codex)
+}
+
+fn poll_with(
+    show_claude_code: bool,
+    show_codex: bool,
+    mut poll_claude_code: impl FnMut() -> Result<UsageData, PollError>,
+    mut poll_codex: impl FnMut() -> Result<UsageData, PollError>,
+) -> Result<AppUsageData, PollError> {
     let mut data = AppUsageData::default();
+    let mut first_error = None;
 
     if show_claude_code {
-        data.claude_code = Some(poll_claude_code()?);
+        match poll_claude_code() {
+            Ok(claude_code) => data.claude_code = Some(claude_code),
+            Err(error) => {
+                if show_codex {
+                    diagnose::log(format!("Claude Code usage poll failed: {error:?}"));
+                }
+                first_error.get_or_insert(error);
+            }
+        }
     }
 
     if show_codex {
         match poll_codex() {
             Ok(codex) => data.codex = Some(codex),
-            Err(error) if !show_claude_code => return Err(error),
-            Err(error) => diagnose::log(format!("Codex usage poll failed: {error:?}")),
+            Err(error) => {
+                if show_claude_code {
+                    diagnose::log(format!("Codex usage poll failed: {error:?}"));
+                }
+                first_error.get_or_insert(error);
+            }
         }
     }
 
     if data.claude_code.is_none() && data.codex.is_none() {
-        Err(PollError::RequestFailed)
+        Err(first_error.unwrap_or(PollError::RequestFailed))
     } else {
         Ok(data)
     }
@@ -1096,4 +1118,60 @@ pub fn is_past_reset(data: &UsageData) -> bool {
 pub fn app_is_past_reset(data: &AppUsageData) -> bool {
     data.claude_code.as_ref().is_some_and(is_past_reset)
         || data.codex.as_ref().is_some_and(is_past_reset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage_with_session_percent(percentage: f64) -> UsageData {
+        UsageData {
+            session: UsageSection {
+                percentage,
+                resets_at: None,
+            },
+            weekly: UsageSection::default(),
+        }
+    }
+
+    #[test]
+    fn claude_failure_does_not_block_codex_when_both_are_enabled() {
+        let data = poll_with(
+            true,
+            true,
+            || Err(PollError::AuthRequired),
+            || Ok(usage_with_session_percent(42.0)),
+        )
+        .expect("codex data should keep the poll successful");
+
+        assert!(data.claude_code.is_none());
+        assert_eq!(data.codex.unwrap().session.percentage, 42.0);
+    }
+
+    #[test]
+    fn codex_failure_does_not_block_claude_when_both_are_enabled() {
+        let data = poll_with(
+            true,
+            true,
+            || Ok(usage_with_session_percent(64.0)),
+            || Err(PollError::RequestFailed),
+        )
+        .expect("claude data should keep the poll successful");
+
+        assert_eq!(data.claude_code.unwrap().session.percentage, 64.0);
+        assert!(data.codex.is_none());
+    }
+
+    #[test]
+    fn returns_first_error_when_no_enabled_provider_succeeds() {
+        let error = poll_with(
+            true,
+            true,
+            || Err(PollError::AuthRequired),
+            || Err(PollError::RequestFailed),
+        )
+        .expect_err("all-provider failure should return an error");
+
+        assert_eq!(error, PollError::AuthRequired);
+    }
 }
