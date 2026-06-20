@@ -1060,6 +1060,25 @@ const MODEL_RIGHT_MARGIN: i32 = 3;
 const RIGHT_MARGIN: i32 = 1;
 const WIDGET_HEIGHT: i32 = 46;
 
+fn is_drag_handle_point(client_x: i32, client_y: i32) -> bool {
+    let divider_h = sc(25);
+    let divider_top = (sc(WIDGET_HEIGHT) - divider_h) / 2;
+    client_x >= 0
+        && client_x < sc(LEFT_DIVIDER_W)
+        && client_y >= divider_top
+        && client_y < divider_top + divider_h
+}
+
+fn cursor_is_on_drag_handle(hwnd: HWND) -> bool {
+    unsafe {
+        let mut pt = POINT::default();
+        if GetCursorPos(&mut pt).is_err() || !ScreenToClient(hwnd, &mut pt).as_bool() {
+            return false;
+        }
+        is_drag_handle_point(pt.x, pt.y)
+    }
+}
+
 fn active_model_count(show_claude_code: bool, show_codex: bool, show_antigravity: bool) -> i32 {
     (show_claude_code as i32 + show_codex as i32 + show_antigravity as i32).max(1)
 }
@@ -2309,14 +2328,12 @@ unsafe extern "system" fn wnd_proc(
                 let state = lock_state();
                 state.as_ref().map(|s| s.dragging).unwrap_or(false)
             };
-            // Always show resize cursor while dragging or when hovering divider zone
-            let hit_test = (lparam.0 & 0xFFFF) as u16;
             if is_dragging {
                 let cursor = LoadCursorW(HINSTANCE::default(), IDC_SIZEWE).unwrap_or_default();
                 SetCursor(cursor);
                 return LRESULT(1);
             }
-            if hit_test == 1 {
+            if cursor_is_on_drag_handle(hwnd) {
                 let cursor = LoadCursorW(HINSTANCE::default(), IDC_SIZEWE).unwrap_or_default();
                 SetCursor(cursor);
                 return LRESULT(1);
@@ -2325,6 +2342,11 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_LBUTTONDOWN => {
             let client_x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let client_y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            if !is_drag_handle_point(client_x, client_y) {
+                return LRESULT(0);
+            }
+
             let mut pt = POINT::default();
             let _ = GetCursorPos(&mut pt);
             let mut state = lock_state();
