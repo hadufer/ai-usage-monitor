@@ -175,13 +175,13 @@ const ENV_LAST_RELAUNCH_UNIX: &str = "CCUM_LAST_RELAUNCH_UNIX";
 /// Relaunch the widget as a fresh process after explorer.exe has restarted.
 ///
 /// When the shell restarts it destroys our embedded child window outright (the
-/// window is gone, not merely orphaned — `IsWindow` returns false) and leaves
+/// window is gone, not merely orphaned - `IsWindow` returns false) and leaves
 /// the UI thread parked in `GetMessage` with no window to recreate in place.
-/// Spawning a clean new process — which re-embeds into the freshly created
-/// taskbar — and exiting this one is the robust recovery. The child is flagged
+/// Spawning a clean new process - which re-embeds into the freshly created
+/// taskbar - and exiting this one is the robust recovery. The child is flagged
 /// via `ENV_RELAUNCH` so it waits for this instance's single-instance mutex to
 /// be released before taking over (see the guard in `run`).
-fn relaunch_self() -> ! {
+fn relaunch_self() {
     // Back off if we are relaunching very soon after the relaunch that spawned
     // us: that signals the shell is crash-looping, not a one-off restart.
     let now = now_unix_secs();
@@ -194,16 +194,29 @@ fn relaunch_self() -> ! {
         std::thread::sleep(Duration::from_secs(RELAUNCH_BACKOFF_SECS));
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        let _ = std::process::Command::new(exe)
-            .args(&args)
-            .env(ENV_RELAUNCH, "1")
-            .env(ENV_LAST_RELAUNCH_UNIX, now.to_string())
-            .spawn();
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            diagnose::log_error("watchdog: unable to resolve current executable", error);
+            return;
+        }
+    };
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match std::process::Command::new(exe)
+        .args(&args)
+        .env(ENV_RELAUNCH, "1")
+        .env(ENV_LAST_RELAUNCH_UNIX, now.to_string())
+        .spawn()
+    {
+        Ok(_) => {
+            diagnose::log("watchdog: relaunched fresh instance, exiting old one");
+            std::process::exit(0);
+        }
+        Err(error) => {
+            diagnose::log_error("watchdog: unable to spawn relaunched instance", error);
+        }
     }
-    diagnose::log("watchdog: relaunched fresh instance, exiting old one");
-    std::process::exit(0);
 }
 
 /// Detect explorer.exe restarts and recover from them.
@@ -984,13 +997,19 @@ pub fn run() {
     let is_relaunch = std::env::var(ENV_RELAUNCH).is_ok();
     let mutex_name = native_interop::wide_str("Global\\ClaudeCodeUsageMonitor");
     let _mutex = unsafe {
-        let handle = CreateMutexW(None, false, PCWSTR::from_raw(mutex_name.as_ptr()));
+        let handle = CreateMutexW(None, true, PCWSTR::from_raw(mutex_name.as_ptr()));
         match handle {
             Ok(h) => {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
                     if is_relaunch {
                         diagnose::log("relaunch: waiting for previous instance to exit");
-                        let _ = WaitForSingleObject(h, 10_000);
+                        let wait_result = WaitForSingleObject(h, 10_000);
+                        if wait_result != WAIT_OBJECT_0 && wait_result != WAIT_ABANDONED {
+                            diagnose::log(format!(
+                                "startup aborted: previous instance did not exit cleanly ({wait_result:?})"
+                            ));
+                            return;
+                        }
                     } else {
                         diagnose::log("startup aborted: another instance is already running");
                         return;
