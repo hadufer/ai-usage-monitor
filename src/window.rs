@@ -1065,10 +1065,10 @@ fn active_model_count(show_claude_code: bool, show_codex: bool, show_antigravity
 }
 
 fn row_bar_segment_count(active_models: i32) -> i32 {
-    if active_models > 1 {
-        5
-    } else {
-        SEGMENT_COUNT
+    match active_models {
+        1 => SEGMENT_COUNT,
+        2 => 5,
+        _ => 4,
     }
 }
 
