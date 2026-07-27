@@ -51,25 +51,29 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 
 ## Install
 
-Install the latest version from WinGet:
+Download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it. Nothing else to install.
+
+A WinGet package is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/408338). Once it is merged, this will work:
 
 ```powershell
 winget install hadufer.ClaudeCodeUsageMonitor
 ```
 
-If you prefer not to use WinGet, you can still download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it directly.
+Until then that command reports `No package found matching input criteria`, because the identifier does not exist in the catalogue yet.
 
-The upstream package is a different one, `CodeZeno.ClaudeCodeUsageMonitor`. Both
+The upstream package, `CodeZeno.ClaudeCodeUsageMonitor`, is a different one. Both
 provide the same `claude-code-usage-monitor` command, so uninstall one before
 installing the other.
 
 ## Use
 
-After installing with WinGet, run:
+If you installed with WinGet, run:
 
 ```powershell
 claude-code-usage-monitor
 ```
+
+If you downloaded the release directly, run the executable itself — the `claude-code-usage-monitor` command only exists once WinGet has created its shim.
 
 Once running, it will appear in your taskbar and as one or more tray icons in the notification area.
 
