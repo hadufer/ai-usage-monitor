@@ -3,6 +3,12 @@
 
 # Claude Code Usage Monitor
 
+> This is a fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor).
+> It adds three things: the bars are coloured by how fast you are burning the
+> window rather than by the raw percentage, a third bar tracks the per-model
+> weekly limit, and both are configurable from the settings file. Everything
+> else is upstream's work.
+
 ![Screenshot](.github/animation.gif)
 
 A lightweight Windows taskbar widget for people already using Claude Code, with optional Codex and Google Antigravity usage display.
@@ -13,6 +19,8 @@ It sits in your taskbar and shows how much of your Claude Code, Codex, and/or An
 
 - A **5h** bar for your current 5-hour Claude usage window
 - A **7d** bar for your current 7-day window
+- A third bar for the **per-model weekly limit**, labelled with whatever model the API reports it against
+- Bars coloured by **consumption pace** instead of raw percentage, so 40% used with four hours left reads differently from 40% used with twenty minutes left
 - Optional Codex usage bars alongside Claude Code
 - Optional Antigravity model usage bars for Google's 5-hour and weekly Gemini quota windows
 - A live countdown until each limit resets
@@ -46,10 +54,14 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 Install the latest version from WinGet:
 
 ```powershell
-winget install CodeZeno.ClaudeCodeUsageMonitor
+winget install hadufer.ClaudeCodeUsageMonitor
 ```
 
-If you prefer not to use WinGet, you can still download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases) page and run it directly.
+If you prefer not to use WinGet, you can still download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it directly.
+
+The upstream package is a different one, `CodeZeno.ClaudeCodeUsageMonitor`. Both
+provide the same `claude-code-usage-monitor` command, so uninstall one before
+installing the other.
 
 ## Use
 
@@ -83,9 +95,73 @@ The tray icon shows your current 5-hour usage as a percentage badge.
 
 If multiple providers are enabled, the app shows one tray icon per provider. If only one model is enabled, it shows one tray icon.
 
-The Claude Code tray icon uses the same warm usage colors as the Claude bar. The Codex tray icon uses a black and white badge style. The Antigravity tray icon uses a blue badge style.
+The Claude Code tray icon uses the same pace colours as the Claude bars, with the badge number switching to a dark ink on the light amber band so it stays readable. The Codex tray icon uses a black and white badge style. The Antigravity tray icon uses a blue badge style.
 
 Hovering over a tray icon shows the usage values for that model.
+
+## Pace Colours
+
+A bar coloured by raw percentage cannot tell you whether you are in trouble: 40%
+spent means one thing four hours before the reset and another twenty minutes
+before it. So each bar is coloured by pace instead, on the same scale the Claude
+Code statusline uses:
+
+```text
+pace = percentage * window / elapsed
+```
+
+100 means you are exactly on track to reach the limit at the reset. Below 85 is
+green, 85 to 115 amber, above that brick red.
+
+Elapsed time is clamped to a tenth of the window. Without that floor, spending
+one percent two minutes after a reset divides by almost nothing and paints the
+bar red for no reason. The clamp keeps the warning where it belongs: burning 40%
+of the window in its first twenty minutes still reads red, because it should.
+
+The three bands differ in lightness as well as hue. That is deliberate — three
+equally light traffic-light colours collapse into each other under the common
+forms of colour blindness, and the bars are only thirteen pixels tall.
+
+Turn the whole thing off from the right-click **Settings** menu to get upstream's
+percentage colouring back.
+
+## Per-Model Weekly Bar
+
+Anthropic reports a separate weekly allowance for some models. The API does not
+expose it as its own field: it appears inside the response's `limits` array as a
+`weekly_scoped` entry, carrying the model it applies to. The third bar reads it
+from there and takes its label from the model name the API gives, so a rename on
+Anthropic's side follows through instead of leaving a stale label behind.
+
+The bar only appears once the API has actually reported such a limit. Because a
+third row has to fit the taskbar height Windows allows, the rows close up while
+it is shown and the label column widens to hold a model name. Toggle it from the
+right-click **Settings** menu.
+
+One limitation: this data only exists in the usage endpoint's response. When the
+app falls back to reading rate-limit headers from the Messages API, the third bar
+disappears until the usage endpoint answers again.
+
+## Settings File
+
+Two toggles live in the right-click **Settings** menu. The thresholds and colours
+are file-only, because a Windows context menu is a poor place to type a hex code.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `pace_colors` | `true` | Colour by pace instead of raw percentage |
+| `show_scoped_weekly` | `true` | Show the per-model weekly bar |
+| `pace_on_track` | `85` | Below this pace, the bar is green |
+| `pace_at_risk` | `115` | Below this, amber; at or above, red |
+| `pace_min_elapsed_fraction` | `0.1` | Floor on elapsed time, as a fraction of the window |
+| `pace_color_on_track` | `#3F9142` | |
+| `pace_color_at_risk` | `#E8A33C` | |
+| `pace_color_over` | `#C4402F` | |
+
+Values are validated when read. An unparsable colour or a threshold pair that
+would leave a band unreachable falls back to its default rather than taking the
+app down with it. Saving rewrites the file in place, so values you tuned by hand
+survive a menu click.
 
 ## Diagnostics
 
@@ -100,6 +176,11 @@ This writes a log file to:
 ```text
 %TEMP%\claude-code-usage-monitor.log
 ```
+
+With diagnostics on, that log includes the raw body of the usage response, which
+is how the per-model weekly limit was found in the first place. It holds usage
+percentages and reset times, never a token, and the file is rewritten on every
+run. Diagnostics are off unless you pass the flag.
 
 Settings are saved to:
 
@@ -146,6 +227,7 @@ What the app stores locally:
 - Language preference
 - Last update check time
 - Displayed model preferences
+- Pace colouring preferences: the two toggles, the thresholds, the elapsed floor and the three band colours
 
 What it does **not** do:
 
