@@ -19,6 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
+use crate::pace;
 use crate::native_interop::{
     self, Color, TIMER_COUNTDOWN, TIMER_POLL, TIMER_RESET_POLL, TIMER_UPDATE_CHECK, WM_APP_TRAY,
     WM_APP_USAGE_UPDATED,
@@ -396,6 +397,15 @@ fn save_state_settings() {
     }
 }
 
+fn claude_session_pace(data: Option<&AppUsageData>) -> Option<f64> {
+    let usage = data.and_then(|data| data.claude_code.as_ref())?;
+    pace::pace(
+        &usage.session,
+        pace::SESSION_WINDOW,
+        std::time::SystemTime::now(),
+    )
+}
+
 fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
     let state = lock_state();
     match state.as_ref() {
@@ -405,6 +415,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Claude,
                     percent: Some(s.session_percent),
+                    pace: claude_session_pace(s.data.as_ref()),
                     tooltip: format!(
                         "{} 5h: {} | 7d: {}",
                         s.language.strings().claude_code_model,
@@ -417,6 +428,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Codex,
                     percent: Some(s.codex_session_percent),
+                    pace: None,
                     tooltip: format!(
                         "{} 5h: {} | 7d: {}",
                         s.language.strings().codex_model,
@@ -429,6 +441,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Antigravity,
                     percent: Some(s.antigravity_session_percent),
+                    pace: None,
                     tooltip: format!(
                         "{} 5h: {} | 7d: {}",
                         s.language.strings().antigravity_model,
@@ -445,6 +458,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Claude,
                     percent: None,
+                    pace: None,
                     tooltip: s.language.strings().window_title.to_string(),
                 });
             }
@@ -452,6 +466,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Codex,
                     percent: None,
+                    pace: None,
                     tooltip: s.language.strings().codex_window_title.to_string(),
                 });
             }
@@ -459,6 +474,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Antigravity,
                     percent: None,
+                    pace: None,
                     tooltip: s.language.strings().antigravity_window_title.to_string(),
                 });
             }
@@ -1130,6 +1146,20 @@ fn claude_accent_color() -> Color {
     Color::from_hex("#D97757")
 }
 
+/// Session and weekly bar colours derived from the consumption pace, falling
+/// back to the brand accent while no reset time is known.
+fn claude_pace_accents(data: Option<&AppUsageData>) -> (Color, Color) {
+    let fallback = claude_accent_color();
+    let Some(usage) = data.and_then(|data| data.claude_code.as_ref()) else {
+        return (fallback, fallback);
+    };
+
+    (
+        pace::section_color(&usage.session, pace::SESSION_WINDOW, fallback),
+        pace::section_color(&usage.weekly, pace::WEEKLY_WINDOW, fallback),
+    )
+}
+
 fn codex_accent_color(is_dark: bool) -> Color {
     if is_dark {
         Color::from_hex("#F5F5F5")
@@ -1436,6 +1466,7 @@ fn render_layered() {
         show_claude_code,
         show_codex,
         show_antigravity,
+        claude_accents,
     ) = {
         let state = lock_state();
         match state.as_ref() {
@@ -1459,6 +1490,7 @@ fn render_layered() {
                 s.show_claude_code,
                 s.show_codex,
                 s.show_antigravity,
+                claude_pace_accents(s.data.as_ref()),
             ),
             None => return,
         }
@@ -1477,7 +1509,7 @@ fn render_layered() {
     let width = total_widget_width();
     let height = sc(WIDGET_HEIGHT);
 
-    let accent = claude_accent_color();
+    let (session_accent, weekly_accent) = claude_accents;
     let codex_accent = codex_accent_color(is_dark);
     let antigravity_accent = antigravity_accent_color();
     let track = if is_dark {
@@ -1536,7 +1568,8 @@ fn render_layered() {
             is_dark,
             &bg_color,
             &text_color,
-            &accent,
+            &session_accent,
+            &weekly_accent,
             &track,
             strings,
             session_pct,
@@ -1612,7 +1645,8 @@ fn paint_content(
     is_dark: bool,
     bg: &Color,
     text_color: &Color,
-    accent: &Color,
+    session_accent: &Color,
+    weekly_accent: &Color,
     track: &Color,
     strings: Strings,
     session_pct: f64,
@@ -1724,7 +1758,7 @@ fn paint_content(
             show_claude_code,
             show_codex,
             show_antigravity,
-            accent,
+            session_accent,
             codex_accent,
             antigravity_accent,
             track,
@@ -1745,7 +1779,7 @@ fn paint_content(
             show_claude_code,
             show_codex,
             show_antigravity,
-            accent,
+            weekly_accent,
             codex_accent,
             antigravity_accent,
             track,
@@ -2991,6 +3025,7 @@ fn paint(hdc: HDC, hwnd: HWND) {
         show_claude_code,
         show_codex,
         show_antigravity,
+        claude_accents,
     ) = {
         let state = lock_state();
         match state.as_ref() {
@@ -3012,12 +3047,13 @@ fn paint(hdc: HDC, hwnd: HWND) {
                 s.show_claude_code,
                 s.show_codex,
                 s.show_antigravity,
+                claude_pace_accents(s.data.as_ref()),
             ),
             None => return,
         }
     };
 
-    let accent = claude_accent_color();
+    let (session_accent, weekly_accent) = claude_accents;
     let codex_accent = codex_accent_color(is_dark);
     let antigravity_accent = antigravity_accent_color();
     let track = if is_dark {
@@ -3057,7 +3093,8 @@ fn paint(hdc: HDC, hwnd: HWND) {
             is_dark,
             &bg_color,
             &text_color,
-            &accent,
+            &session_accent,
+            &weekly_accent,
             &track,
             strings,
             session_pct,

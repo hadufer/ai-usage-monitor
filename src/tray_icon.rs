@@ -34,6 +34,9 @@ pub enum TrayIconKind {
 pub struct TrayIconData {
     pub kind: TrayIconKind,
     pub percent: Option<f64>,
+    /// Consumption pace driving the badge colour; `None` keeps the
+    /// percentage-based colouring.
+    pub pace: Option<f64>,
     pub tooltip: String,
 }
 
@@ -104,7 +107,7 @@ fn antigravity_fill(percent: f64) -> Color {
 /// Create a rounded-rectangle tray icon badge showing the usage percentage.
 /// For Claude, `percent` = None uses the embedded app icon as the loading state.
 /// For Codex and Antigravity, `percent` = None uses a provider placeholder badge.
-pub fn create_icon(kind: TrayIconKind, percent: Option<f64>) -> HICON {
+pub fn create_icon(kind: TrayIconKind, percent: Option<f64>, pace: Option<f64>) -> HICON {
     if matches!(kind, TrayIconKind::Claude) && percent.is_none() {
         let app_icon = load_embedded_app_icon();
         if !app_icon.is_invalid() {
@@ -122,12 +125,14 @@ pub fn create_icon(kind: TrayIconKind, percent: Option<f64>) -> HICON {
     };
 
     let fill = match kind {
-        TrayIconKind::Claude => interpolated_fill(percent.unwrap_or(0.0)),
+        TrayIconKind::Claude => {
+            crate::pace::pace_color(pace, interpolated_fill(percent.unwrap_or(0.0)))
+        }
         TrayIconKind::Codex => codex_fill(percent.unwrap_or(0.0)),
         TrayIconKind::Antigravity => antigravity_fill(percent.unwrap_or(0.0)),
     };
     let text_col = match kind {
-        TrayIconKind::Claude => Color::from_hex("#FFFFFF"),
+        TrayIconKind::Claude => crate::pace::pace_ink(pace, Color::from_hex("#FFFFFF")),
         TrayIconKind::Codex if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#111111"),
         TrayIconKind::Codex => Color::from_hex("#FFFFFF"),
         TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1967D2"),
@@ -360,8 +365,8 @@ fn copy_wide_256(s: &str, buf: &mut [u16; 256]) {
 }
 
 /// Register the tray icon with the shell.
-pub fn add(hwnd: HWND, kind: TrayIconKind, percent: Option<f64>, tooltip: &str) {
-    let hicon = create_icon(kind, percent);
+pub fn add(hwnd: HWND, kind: TrayIconKind, percent: Option<f64>, pace: Option<f64>, tooltip: &str) {
+    let hicon = create_icon(kind, percent, pace);
     unsafe {
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -379,8 +384,14 @@ pub fn add(hwnd: HWND, kind: TrayIconKind, percent: Option<f64>, tooltip: &str) 
 }
 
 /// Update the tray icon colour and tooltip to reflect current usage.
-pub fn update(hwnd: HWND, kind: TrayIconKind, percent: Option<f64>, tooltip: &str) {
-    let hicon = create_icon(kind, percent);
+pub fn update(
+    hwnd: HWND,
+    kind: TrayIconKind,
+    percent: Option<f64>,
+    pace: Option<f64>,
+    tooltip: &str,
+) {
+    let hicon = create_icon(kind, percent, pace);
     unsafe {
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -419,22 +430,22 @@ pub fn sync(hwnd: HWND, icons: &[TrayIconData]) {
         .find(|icon| matches!(icon.kind, TrayIconKind::Antigravity));
 
     if let Some(icon) = show_claude {
-        add(hwnd, icon.kind, icon.percent, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, &icon.tooltip);
+        add(hwnd, icon.kind, icon.percent, icon.pace, &icon.tooltip);
+        update(hwnd, icon.kind, icon.percent, icon.pace, &icon.tooltip);
     } else {
         remove(hwnd, TrayIconKind::Claude);
     }
 
     if let Some(icon) = show_codex {
-        add(hwnd, icon.kind, icon.percent, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, &icon.tooltip);
+        add(hwnd, icon.kind, icon.percent, icon.pace, &icon.tooltip);
+        update(hwnd, icon.kind, icon.percent, icon.pace, &icon.tooltip);
     } else {
         remove(hwnd, TrayIconKind::Codex);
     }
 
     if let Some(icon) = show_antigravity {
-        add(hwnd, icon.kind, icon.percent, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, &icon.tooltip);
+        add(hwnd, icon.kind, icon.percent, icon.pace, &icon.tooltip);
+        update(hwnd, icon.kind, icon.percent, icon.pace, &icon.tooltip);
     } else {
         remove(hwnd, TrayIconKind::Antigravity);
     }
