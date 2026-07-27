@@ -47,4 +47,6 @@ pub(super) const STRINGS: Strings = Strings {
     antigravity_token_expired_body: "Откройте Antigravity и войдите снова. После этого обновите или перезапустите приложение.",
     codex_window_title: "Монитор использования Codex",
     antigravity_window_title: "Монитор использования Antigravity",
+    pace_colors: "Цвет по темпу расхода",
+    scoped_weekly_row: "Недельная строка по модели",
 };

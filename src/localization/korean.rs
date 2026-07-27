@@ -47,4 +47,6 @@ pub(super) const STRINGS: Strings = Strings {
     codex_window_title: "Codex 사용량 모니터",
     antigravity_window_title: "Antigravity 사용량 모니터",
     second_suffix: "초",
+    pace_colors: "속도에 따라 색상 지정",
+    scoped_weekly_row: "모델별 주간 행",
 };

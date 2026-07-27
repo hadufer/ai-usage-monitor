@@ -208,6 +208,21 @@ impl Color {
         Self { r, g, b }
     }
 
+    /// Parse a colour that came from the settings file, where anything at all
+    /// may be written. `from_hex` indexes blindly and would panic.
+    pub fn try_from_hex(hex: &str) -> Option<Self> {
+        let hex = hex.trim().trim_start_matches('#');
+        if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+
+        Some(Self {
+            r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+            g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+            b: u8::from_str_radix(&hex[4..6], 16).ok()?,
+        })
+    }
+
     pub fn to_colorref(self) -> u32 {
         colorref(self.r, self.g, self.b)
     }

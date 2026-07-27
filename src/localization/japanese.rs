@@ -47,4 +47,6 @@ pub(super) const STRINGS: Strings = Strings {
     codex_window_title: "Codex 使用量モニター",
     antigravity_window_title: "Antigravity 使用量モニター",
     second_suffix: "秒",
+    pace_colors: "ペースで色分け",
+    scoped_weekly_row: "モデル別の週間行",
 };

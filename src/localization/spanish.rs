@@ -47,4 +47,6 @@ pub(super) const STRINGS: Strings = Strings {
     codex_window_title: "Monitor de uso de Codex",
     antigravity_window_title: "Monitor de uso de Antigravity",
     second_suffix: "s",
+    pace_colors: "Color según el ritmo",
+    scoped_weekly_row: "Fila semanal por modelo",
 };

@@ -68,9 +68,14 @@ struct AppState {
     antigravity_session_text: String,
     antigravity_weekly_percent: f64,
     antigravity_weekly_text: String,
+    scoped_percent: f64,
+    scoped_text: String,
+    scoped_label: String,
     show_claude_code: bool,
     show_codex: bool,
     show_antigravity: bool,
+    show_scoped_weekly: bool,
+    pace: pace::Settings,
 
     data: Option<AppUsageData>,
 
@@ -130,6 +135,8 @@ const IDM_LANG_TRADITIONAL_CHINESE: u16 = 48;
 const IDM_LANG_RUSSIAN: u16 = 49;
 const IDM_LANG_PORTUGUESE_BRAZIL: u16 = 50;
 const IDM_LANG_SIMPLIFIED_CHINESE: u16 = 51;
+const IDM_PACE_COLORS: u16 = 32;
+const IDM_SCOPED_WEEKLY_ROW: u16 = 33;
 const IDM_MODEL_CLAUDE_CODE: u16 = 60;
 const IDM_MODEL_CODEX: u16 = 61;
 const IDM_MODEL_ANTIGRAVITY: u16 = 62;
@@ -318,6 +325,22 @@ struct SettingsFile {
     show_codex: bool,
     #[serde(default = "default_show_antigravity")]
     show_antigravity: bool,
+    #[serde(default = "default_true")]
+    show_scoped_weekly: bool,
+    #[serde(default = "default_true")]
+    pace_colors: bool,
+    #[serde(default = "default_pace_on_track")]
+    pace_on_track: f64,
+    #[serde(default = "default_pace_at_risk")]
+    pace_at_risk: f64,
+    #[serde(default = "default_pace_min_elapsed_fraction")]
+    pace_min_elapsed_fraction: f64,
+    #[serde(default = "default_pace_color_on_track")]
+    pace_color_on_track: String,
+    #[serde(default = "default_pace_color_at_risk")]
+    pace_color_at_risk: String,
+    #[serde(default = "default_pace_color_over")]
+    pace_color_over: String,
 }
 
 impl Default for SettingsFile {
@@ -332,12 +355,48 @@ impl Default for SettingsFile {
             show_claude_code: true,
             show_codex: false,
             show_antigravity: false,
+            show_scoped_weekly: true,
+            pace_colors: true,
+            pace_on_track: default_pace_on_track(),
+            pace_at_risk: default_pace_at_risk(),
+            pace_min_elapsed_fraction: default_pace_min_elapsed_fraction(),
+            pace_color_on_track: default_pace_color_on_track(),
+            pace_color_at_risk: default_pace_color_at_risk(),
+            pace_color_over: default_pace_color_over(),
         }
     }
 }
 
 fn default_poll_interval() -> u32 {
     POLL_15_MIN
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_pace_on_track() -> f64 {
+    pace::DEFAULT_ON_TRACK
+}
+
+fn default_pace_at_risk() -> f64 {
+    pace::DEFAULT_AT_RISK
+}
+
+fn default_pace_min_elapsed_fraction() -> f64 {
+    pace::DEFAULT_MIN_ELAPSED_FRACTION
+}
+
+fn default_pace_color_on_track() -> String {
+    pace::DEFAULT_COLOR_ON_TRACK.to_string()
+}
+
+fn default_pace_color_at_risk() -> String {
+    pace::DEFAULT_COLOR_AT_RISK.to_string()
+}
+
+fn default_pace_color_over() -> String {
+    pace::DEFAULT_COLOR_OVER.to_string()
 }
 
 fn default_widget_visible() -> bool {
@@ -378,31 +437,62 @@ fn save_settings(settings: &SettingsFile) {
     }
 }
 
+fn pace_settings_from(settings: &SettingsFile) -> pace::Settings {
+    pace::Settings::sanitized(
+        settings.pace_colors,
+        settings.pace_on_track,
+        settings.pace_at_risk,
+        settings.pace_min_elapsed_fraction,
+        &settings.pace_color_on_track,
+        &settings.pace_color_at_risk,
+        &settings.pace_color_over,
+    )
+}
+
+/// Written back over the file as it is on disk, so the values that are only
+/// tunable by hand keep whatever the user put there.
 fn save_state_settings() {
     let state = lock_state();
     if let Some(s) = state.as_ref() {
-        save_settings(&SettingsFile {
-            tray_offset: s.tray_offset,
-            taskbar_index: s.taskbar_index,
-            poll_interval_ms: s.poll_interval_ms,
-            language: s
-                .language_override
-                .map(|language| language.code().to_string()),
-            last_update_check_unix: s.last_update_check_unix,
-            widget_visible: s.widget_visible,
-            show_claude_code: s.show_claude_code,
-            show_codex: s.show_codex,
-            show_antigravity: s.show_antigravity,
-        });
+        let mut settings = load_settings();
+        settings.tray_offset = s.tray_offset;
+        settings.taskbar_index = s.taskbar_index;
+        settings.poll_interval_ms = s.poll_interval_ms;
+        settings.language = s
+            .language_override
+            .map(|language| language.code().to_string());
+        settings.last_update_check_unix = s.last_update_check_unix;
+        settings.widget_visible = s.widget_visible;
+        settings.show_claude_code = s.show_claude_code;
+        settings.show_codex = s.show_codex;
+        settings.show_antigravity = s.show_antigravity;
+        settings.show_scoped_weekly = s.show_scoped_weekly;
+        settings.pace_colors = s.pace.enabled;
+        save_settings(&settings);
     }
 }
 
-fn claude_session_pace(data: Option<&AppUsageData>) -> Option<f64> {
-    let usage = data.and_then(|data| data.claude_code.as_ref())?;
+/// `None` leaves the badge on its built-in percentage colouring.
+fn claude_badge_colors(state: &AppState) -> Option<tray_icon::BadgeColors> {
+    let pace = claude_session_pace(state);
+    pace?;
+
+    Some(tray_icon::BadgeColors {
+        fill: pace::pace_color(pace, &state.pace, claude_accent_color()),
+        ink: pace::pace_ink(pace, &state.pace, Color::from_hex("#FFFFFF")),
+    })
+}
+
+fn claude_session_pace(state: &AppState) -> Option<f64> {
+    let usage = state
+        .data
+        .as_ref()
+        .and_then(|data| data.claude_code.as_ref())?;
     pace::pace(
         &usage.session,
         pace::SESSION_WINDOW,
         std::time::SystemTime::now(),
+        &state.pace,
     )
 }
 
@@ -415,20 +505,31 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Claude,
                     percent: Some(s.session_percent),
-                    pace: claude_session_pace(s.data.as_ref()),
-                    tooltip: format!(
-                        "{} 5h: {} | 7d: {}",
-                        s.language.strings().claude_code_model,
-                        s.session_text,
-                        s.weekly_text
-                    ),
+                    colors: claude_badge_colors(s),
+                    tooltip: if scoped_row_visible(s) {
+                        format!(
+                            "{} 5h: {} | 7d: {} | {}: {}",
+                            s.language.strings().claude_code_model,
+                            s.session_text,
+                            s.weekly_text,
+                            s.scoped_label,
+                            s.scoped_text
+                        )
+                    } else {
+                        format!(
+                            "{} 5h: {} | 7d: {}",
+                            s.language.strings().claude_code_model,
+                            s.session_text,
+                            s.weekly_text
+                        )
+                    },
                 });
             }
             if s.show_codex {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Codex,
                     percent: Some(s.codex_session_percent),
-                    pace: None,
+                    colors: None,
                     tooltip: format!(
                         "{} 5h: {} | 7d: {}",
                         s.language.strings().codex_model,
@@ -441,7 +542,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Antigravity,
                     percent: Some(s.antigravity_session_percent),
-                    pace: None,
+                    colors: None,
                     tooltip: format!(
                         "{} 5h: {} | 7d: {}",
                         s.language.strings().antigravity_model,
@@ -458,7 +559,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Claude,
                     percent: None,
-                    pace: None,
+                    colors: None,
                     tooltip: s.language.strings().window_title.to_string(),
                 });
             }
@@ -466,7 +567,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Codex,
                     percent: None,
-                    pace: None,
+                    colors: None,
                     tooltip: s.language.strings().codex_window_title.to_string(),
                 });
             }
@@ -474,7 +575,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 icons.push(tray_icon::TrayIconData {
                     kind: tray_icon::TrayIconKind::Antigravity,
                     percent: None,
-                    pace: None,
+                    colors: None,
                     tooltip: s.language.strings().antigravity_window_title.to_string(),
                 });
             }
@@ -664,9 +765,20 @@ fn refresh_usage_texts(state: &mut AppState) {
     if let Some(claude_code) = data.claude_code.as_ref() {
         state.session_text = poller::format_line(&claude_code.session, strings);
         state.weekly_text = poller::format_line(&claude_code.weekly, strings);
+        match claude_code.scoped.as_ref() {
+            Some(scoped) => {
+                state.scoped_text = poller::format_line(&scoped.section, strings);
+                state.scoped_label = scoped.label.clone();
+            }
+            None => {
+                state.scoped_text = "--".to_string();
+                state.scoped_label = String::new();
+            }
+        }
     } else if state.show_claude_code {
         state.session_text = "!".to_string();
         state.weekly_text = "!".to_string();
+        state.scoped_text = "!".to_string();
     }
 
     if let Some(codex) = data.codex.as_ref() {
@@ -1070,6 +1182,8 @@ const CORNER_RADIUS: i32 = 2;
 const LEFT_DIVIDER_W: i32 = 3;
 const DIVIDER_RIGHT_MARGIN: i32 = 10;
 const LABEL_WIDTH: i32 = 18;
+/// Wide enough for a model name such as "Fable" instead of just "5h".
+const SCOPED_LABEL_WIDTH: i32 = 34;
 const LABEL_RIGHT_MARGIN: i32 = 10;
 const BAR_RIGHT_MARGIN: i32 = 4;
 const TEXT_WIDTH: i32 = 62;
@@ -1108,7 +1222,7 @@ fn row_bar_segment_count(active_models: i32) -> i32 {
     }
 }
 
-fn total_widget_width_for(active_models: i32) -> i32 {
+fn total_widget_width_for(active_models: i32, scoped_visible: bool) -> i32 {
     let bar_segments = row_bar_segment_count(active_models);
     let model_width = (sc(SEGMENT_W) + sc(SEGMENT_GAP)) * bar_segments - sc(SEGMENT_GAP)
         + sc(BAR_RIGHT_MARGIN)
@@ -1116,7 +1230,7 @@ fn total_widget_width_for(active_models: i32) -> i32 {
 
     sc(LEFT_DIVIDER_W)
         + sc(DIVIDER_RIGHT_MARGIN)
-        + sc(LABEL_WIDTH)
+        + sc(row_label_width(scoped_visible))
         + sc(LABEL_RIGHT_MARGIN)
         + model_width * active_models
         + sc(MODEL_RIGHT_MARGIN) * (active_models - 1)
@@ -1124,40 +1238,65 @@ fn total_widget_width_for(active_models: i32) -> i32 {
 }
 
 fn total_widget_width_for_state(state: &AppState) -> i32 {
-    total_widget_width_for(active_model_count(
-        state.show_claude_code,
-        state.show_codex,
-        state.show_antigravity,
-    ))
+    total_widget_width_for(
+        active_model_count(
+            state.show_claude_code,
+            state.show_codex,
+            state.show_antigravity,
+        ),
+        scoped_row_visible(state),
+    )
 }
 
 fn total_widget_width() -> i32 {
-    let active_models = {
-        let state = lock_state();
-        state
-            .as_ref()
-            .map(|s| active_model_count(s.show_claude_code, s.show_codex, s.show_antigravity))
-            .unwrap_or(1)
-    };
-    total_widget_width_for(active_models)
+    let state = lock_state();
+    match state.as_ref() {
+        Some(s) => total_widget_width_for_state(s),
+        None => total_widget_width_for(1, false),
+    }
 }
 
 fn claude_accent_color() -> Color {
     Color::from_hex("#D97757")
 }
 
-/// Session and weekly bar colours derived from the consumption pace, falling
-/// back to the brand accent while no reset time is known.
-fn claude_pace_accents(data: Option<&AppUsageData>) -> (Color, Color) {
+/// Row colours derived from the consumption pace, falling back to the brand
+/// accent while no reset time is known or the setting is off.
+fn claude_pace_accents(state: &AppState) -> (Color, Color, Color) {
     let fallback = claude_accent_color();
-    let Some(usage) = data.and_then(|data| data.claude_code.as_ref()) else {
-        return (fallback, fallback);
+    let Some(usage) = state
+        .data
+        .as_ref()
+        .and_then(|data| data.claude_code.as_ref())
+    else {
+        return (fallback, fallback, fallback);
     };
 
     (
-        pace::section_color(&usage.session, pace::SESSION_WINDOW, fallback),
-        pace::section_color(&usage.weekly, pace::WEEKLY_WINDOW, fallback),
+        pace::section_color(&usage.session, pace::SESSION_WINDOW, &state.pace, fallback),
+        pace::section_color(&usage.weekly, pace::WEEKLY_WINDOW, &state.pace, fallback),
+        usage
+            .scoped
+            .as_ref()
+            .map(|scoped| {
+                pace::section_color(&scoped.section, pace::WEEKLY_WINDOW, &state.pace, fallback)
+            })
+            .unwrap_or(fallback),
     )
+}
+
+/// The scoped row is only meaningful for Claude, and only once the API has
+/// actually reported a scoped limit.
+fn scoped_row_visible(state: &AppState) -> bool {
+    state.show_claude_code && state.show_scoped_weekly && !state.scoped_label.is_empty()
+}
+
+fn row_label_width(scoped_visible: bool) -> i32 {
+    if scoped_visible {
+        SCOPED_LABEL_WIDTH
+    } else {
+        LABEL_WIDTH
+    }
 }
 
 fn codex_accent_color(is_dark: bool) -> Color {
@@ -1283,7 +1422,7 @@ pub fn run() {
             WS_POPUP,
             0,
             0,
-            total_widget_width_for(initial_model_count),
+            total_widget_width_for(initial_model_count, false),
             sc(WIDGET_HEIGHT),
             HWND::default(),
             HMENU::default(),
@@ -1338,9 +1477,14 @@ pub fn run() {
                 antigravity_session_text: "--".to_string(),
                 antigravity_weekly_percent: 0.0,
                 antigravity_weekly_text: "--".to_string(),
+                scoped_percent: 0.0,
+                scoped_text: "--".to_string(),
+                scoped_label: String::new(),
                 show_claude_code: settings.show_claude_code,
                 show_codex: settings.show_codex,
                 show_antigravity: settings.show_antigravity,
+                show_scoped_weekly: settings.show_scoped_weekly,
+                pace: pace_settings_from(&settings),
                 data: None,
                 poll_interval_ms: settings.poll_interval_ms,
                 retry_count: 0,
@@ -1467,6 +1611,10 @@ fn render_layered() {
         show_codex,
         show_antigravity,
         claude_accents,
+        scoped_pct,
+        scoped_text,
+        scoped_label,
+        scoped_visible,
     ) = {
         let state = lock_state();
         match state.as_ref() {
@@ -1490,7 +1638,11 @@ fn render_layered() {
                 s.show_claude_code,
                 s.show_codex,
                 s.show_antigravity,
-                claude_pace_accents(s.data.as_ref()),
+                claude_pace_accents(s),
+                s.scoped_percent,
+                s.scoped_text.clone(),
+                s.scoped_label.clone(),
+                scoped_row_visible(s),
             ),
             None => return,
         }
@@ -1509,7 +1661,7 @@ fn render_layered() {
     let width = total_widget_width();
     let height = sc(WIDGET_HEIGHT);
 
-    let (session_accent, weekly_accent) = claude_accents;
+    let (session_accent, weekly_accent, scoped_accent) = claude_accents;
     let codex_accent = codex_accent_color(is_dark);
     let antigravity_accent = antigravity_accent_color();
     let track = if is_dark {
@@ -1570,6 +1722,7 @@ fn render_layered() {
             &text_color,
             &session_accent,
             &weekly_accent,
+            &scoped_accent,
             &track,
             strings,
             session_pct,
@@ -1589,6 +1742,10 @@ fn render_layered() {
             show_antigravity,
             &codex_accent,
             &antigravity_accent,
+            scoped_pct,
+            &scoped_text,
+            &scoped_label,
+            scoped_visible,
         );
 
         // Background pixels → alpha 1 (nearly invisible but still hittable for right-click).
@@ -1647,6 +1804,7 @@ fn paint_content(
     text_color: &Color,
     session_accent: &Color,
     weekly_accent: &Color,
+    scoped_accent: &Color,
     track: &Color,
     strings: Strings,
     session_pct: f64,
@@ -1666,6 +1824,10 @@ fn paint_content(
     show_antigravity: bool,
     codex_accent: &Color,
     antigravity_accent: &Color,
+    scoped_pct: f64,
+    scoped_text: &str,
+    scoped_label: &str,
+    scoped_visible: bool,
 ) {
     unsafe {
         let client_rect = RECT {
@@ -1717,8 +1879,25 @@ fn paint_content(
         let _ = DeleteObject(right_brush);
 
         let content_x = sc(LEFT_DIVIDER_W) + sc(DIVIDER_RIGHT_MARGIN);
-        let row2_y = height - sc(5) - sc(SEGMENT_H);
-        let row1_y = row2_y - sc(10) - sc(SEGMENT_H);
+        // A third row has to come out of the same taskbar height, so the rows
+        // close up instead of the widget growing past what the shell allows.
+        let (row_gap, bottom_margin) = if scoped_visible {
+            (sc(2), sc(2))
+        } else {
+            (sc(10), sc(5))
+        };
+        let last_row_y = height - bottom_margin - sc(SEGMENT_H);
+        let row_step = sc(SEGMENT_H) + row_gap;
+        let (row1_y, row2_y, row3_y) = if scoped_visible {
+            (
+                last_row_y - row_step * 2,
+                last_row_y - row_step,
+                last_row_y,
+            )
+        } else {
+            (last_row_y - row_step, last_row_y, last_row_y)
+        };
+        let label_width = row_label_width(scoped_visible);
 
         let _ = SetBkMode(hdc, TRANSPARENT);
         let _ = SetTextColor(hdc, COLORREF(text_color.to_colorref()));
@@ -1762,6 +1941,7 @@ fn paint_content(
             codex_accent,
             antigravity_accent,
             track,
+            label_width,
         );
         draw_row(
             hdc,
@@ -1783,7 +1963,34 @@ fn paint_content(
             codex_accent,
             antigravity_accent,
             track,
+            label_width,
         );
+        if scoped_visible {
+            // Only Claude reports a per-model weekly limit; the other providers
+            // keep their column so the three rows stay aligned.
+            draw_row(
+                hdc,
+                content_x,
+                row3_y,
+                is_dark,
+                text_color,
+                scoped_label,
+                scoped_pct,
+                scoped_text,
+                0.0,
+                "",
+                0.0,
+                "",
+                show_claude_code,
+                show_codex,
+                show_antigravity,
+                scoped_accent,
+                codex_accent,
+                antigravity_accent,
+                track,
+                label_width,
+            );
+        }
 
         SelectObject(hdc, old_font);
         let _ = DeleteObject(font);
@@ -1807,9 +2014,15 @@ fn do_poll(send_hwnd: SendHwnd) {
                 if let Some(claude_code) = data.claude_code.as_ref() {
                     s.session_percent = claude_code.session.percentage;
                     s.weekly_percent = claude_code.weekly.percentage;
+                    s.scoped_percent = claude_code
+                        .scoped
+                        .as_ref()
+                        .map(|scoped| scoped.section.percentage)
+                        .unwrap_or(0.0);
                 } else if s.show_claude_code {
                     s.session_percent = 0.0;
                     s.weekly_percent = 0.0;
+                    s.scoped_percent = 0.0;
                 }
                 if let Some(codex) = data.codex.as_ref() {
                     s.codex_session_percent = codex.session.percentage;
@@ -2629,6 +2842,24 @@ unsafe extern "system" fn wnd_proc(
                     // Reset the poll timer with the new interval
                     SetTimer(hwnd, TIMER_POLL, new_interval, None);
                 }
+                IDM_PACE_COLORS | IDM_SCOPED_WEEKLY_ROW => {
+                    {
+                        let mut state = lock_state();
+                        if let Some(s) = state.as_mut() {
+                            match id {
+                                IDM_PACE_COLORS => s.pace.enabled = !s.pace.enabled,
+                                IDM_SCOPED_WEEKLY_ROW => {
+                                    s.show_scoped_weekly = !s.show_scoped_weekly;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    save_state_settings();
+                    position_at_taskbar();
+                    render_layered();
+                    sync_tray_icons(hwnd);
+                }
                 IDM_MODEL_CLAUDE_CODE | IDM_MODEL_CODEX | IDM_MODEL_ANTIGRAVITY => {
                     {
                         let mut state = lock_state();
@@ -2752,6 +2983,9 @@ fn show_context_menu(hwnd: HWND) {
             show_claude_code,
             show_codex,
             show_antigravity,
+            pace_colors_enabled,
+            show_scoped_weekly,
+            scoped_label,
         ) = {
             let state = lock_state();
             match state.as_ref() {
@@ -2766,6 +3000,9 @@ fn show_context_menu(hwnd: HWND) {
                     s.show_claude_code,
                     s.show_codex,
                     s.show_antigravity,
+                    s.pace.enabled,
+                    s.show_scoped_weekly,
+                    s.scoped_label.clone(),
                 ),
                 None => (
                     POLL_15_MIN,
@@ -2778,6 +3015,9 @@ fn show_context_menu(hwnd: HWND) {
                     true,
                     false,
                     false,
+                    true,
+                    true,
+                    String::new(),
                 ),
             }
         };
@@ -2886,6 +3126,36 @@ fn show_context_menu(hwnd: HWND) {
             startup_flags,
             IDM_START_WITH_WINDOWS as usize,
             PCWSTR::from_raw(startup_str.as_ptr()),
+        );
+
+        let pace_colors_str = native_interop::wide_str(strings.pace_colors);
+        let pace_colors_flags = if pace_colors_enabled {
+            MF_CHECKED
+        } else {
+            MENU_ITEM_FLAGS(0)
+        };
+        let _ = AppendMenuW(
+            settings_menu,
+            pace_colors_flags,
+            IDM_PACE_COLORS as usize,
+            PCWSTR::from_raw(pace_colors_str.as_ptr()),
+        );
+
+        let scoped_row_label = match scoped_label.as_str() {
+            "" => strings.scoped_weekly_row.to_string(),
+            label => format!("{} ({})", strings.scoped_weekly_row, label),
+        };
+        let scoped_row_str = native_interop::wide_str(&scoped_row_label);
+        let scoped_row_flags = if show_scoped_weekly {
+            MF_CHECKED
+        } else {
+            MENU_ITEM_FLAGS(0)
+        };
+        let _ = AppendMenuW(
+            settings_menu,
+            scoped_row_flags,
+            IDM_SCOPED_WEEKLY_ROW as usize,
+            PCWSTR::from_raw(scoped_row_str.as_ptr()),
         );
 
         let reset_pos_str = native_interop::wide_str(strings.reset_position);
@@ -3026,6 +3296,10 @@ fn paint(hdc: HDC, hwnd: HWND) {
         show_codex,
         show_antigravity,
         claude_accents,
+        scoped_pct,
+        scoped_text,
+        scoped_label,
+        scoped_visible,
     ) = {
         let state = lock_state();
         match state.as_ref() {
@@ -3047,13 +3321,17 @@ fn paint(hdc: HDC, hwnd: HWND) {
                 s.show_claude_code,
                 s.show_codex,
                 s.show_antigravity,
-                claude_pace_accents(s.data.as_ref()),
+                claude_pace_accents(s),
+                s.scoped_percent,
+                s.scoped_text.clone(),
+                s.scoped_label.clone(),
+                scoped_row_visible(s),
             ),
             None => return,
         }
     };
 
-    let (session_accent, weekly_accent) = claude_accents;
+    let (session_accent, weekly_accent, scoped_accent) = claude_accents;
     let codex_accent = codex_accent_color(is_dark);
     let antigravity_accent = antigravity_accent_color();
     let track = if is_dark {
@@ -3095,6 +3373,7 @@ fn paint(hdc: HDC, hwnd: HWND) {
             &text_color,
             &session_accent,
             &weekly_accent,
+            &scoped_accent,
             &track,
             strings,
             session_pct,
@@ -3114,6 +3393,10 @@ fn paint(hdc: HDC, hwnd: HWND) {
             show_antigravity,
             &codex_accent,
             &antigravity_accent,
+            scoped_pct,
+            &scoped_text,
+            &scoped_label,
+            scoped_visible,
         );
 
         let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
@@ -3144,6 +3427,7 @@ fn draw_row(
     codex_accent: &Color,
     antigravity_accent: &Color,
     track: &Color,
+    label_width: i32,
 ) {
     let seg_h = sc(SEGMENT_H);
     let active_models = active_model_count(show_claude_code, show_codex, show_antigravity);
@@ -3171,7 +3455,7 @@ fn draw_row(
         let mut label_rect = RECT {
             left: x,
             top: y,
-            right: x + sc(LABEL_WIDTH),
+            right: x + sc(label_width),
             bottom: y + seg_h,
         };
         let _ = DrawTextW(
@@ -3181,7 +3465,7 @@ fn draw_row(
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
 
-        let mut model_x = x + sc(LABEL_WIDTH) + sc(LABEL_RIGHT_MARGIN);
+        let mut model_x = x + sc(label_width) + sc(LABEL_RIGHT_MARGIN);
         if show_claude_code {
             draw_usage_bar(
                 hdc,

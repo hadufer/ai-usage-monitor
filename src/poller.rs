@@ -11,7 +11,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::diagnose;
 use crate::localization::Strings;
-use crate::models::{AppUsageData, UsageData, UsageSection};
+use crate::models::{AppUsageData, ScopedUsage, UsageData, UsageSection};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -47,6 +47,26 @@ pub type CredentialWatchSnapshot = Vec<String>;
 struct UsageResponse {
     five_hour: Option<UsageBucket>,
     seven_day: Option<UsageBucket>,
+    #[serde(default)]
+    limits: Vec<UsageLimit>,
+}
+
+#[derive(Deserialize)]
+struct UsageLimit {
+    kind: Option<String>,
+    percent: Option<f64>,
+    resets_at: Option<String>,
+    scope: Option<UsageLimitScope>,
+}
+
+#[derive(Deserialize)]
+struct UsageLimitScope {
+    model: Option<UsageLimitModel>,
+}
+
+#[derive(Deserialize)]
+struct UsageLimitModel {
+    display_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -703,7 +723,15 @@ fn try_usage_endpoint(token: &str) -> Result<Option<UsageData>, PollError> {
         Err(_) => return Ok(None),
     };
 
-    let response: UsageResponse = match resp.into_json() {
+    let body = match resp.into_string() {
+        Ok(body) => body,
+        Err(_) => return Ok(None),
+    };
+    if diagnose::is_enabled() {
+        diagnose::log(format!("usage endpoint raw body: {body}"));
+    }
+
+    let response: UsageResponse = match serde_json::from_str(&body) {
         Ok(response) => response,
         Err(_) => return Ok(None),
     };
@@ -719,7 +747,35 @@ fn try_usage_endpoint(token: &str) -> Result<Option<UsageData>, PollError> {
         data.weekly.resets_at = parse_iso8601(bucket.resets_at.as_deref());
     }
 
+    data.scoped = scoped_weekly(&response.limits);
+
     Ok(Some(data))
+}
+
+/// The per-model weekly limit, which the API only reports inside `limits`
+/// rather than as its own top-level bucket.
+fn scoped_weekly(limits: &[UsageLimit]) -> Option<ScopedUsage> {
+    let limit = limits
+        .iter()
+        .find(|limit| limit.kind.as_deref() == Some("weekly_scoped"))?;
+
+    let label = limit
+        .scope
+        .as_ref()?
+        .model
+        .as_ref()?
+        .display_name
+        .as_ref()
+        .filter(|label| !label.is_empty())?
+        .clone();
+
+    Some(ScopedUsage {
+        label,
+        section: UsageSection {
+            percentage: limit.percent?,
+            resets_at: parse_iso8601(limit.resets_at.as_deref()),
+        },
+    })
 }
 
 fn fetch_usage_via_messages(token: &str) -> Result<UsageData, PollError> {
@@ -909,7 +965,11 @@ fn fetch_antigravity_usage_from_endpoint(
     let session = fetch_antigravity_model_quota(base_url, token, project.as_deref())?;
     let weekly = UsageSection::default();
 
-    Ok(UsageData { session, weekly })
+    Ok(UsageData {
+        session,
+        weekly,
+        scoped: None,
+    })
 }
 
 fn fetch_antigravity_project(base_url: &str, token: &str) -> Result<Option<String>, PollError> {
@@ -1611,7 +1671,49 @@ mod tests {
                 resets_at: None,
             },
             weekly: UsageSection::default(),
+            scoped: None,
         }
+    }
+
+    #[test]
+    fn reads_the_scoped_weekly_limit_and_its_model_label() {
+        let body = r#"{
+            "five_hour": {"utilization": 36.0, "resets_at": "2026-07-27T17:19:59+00:00"},
+            "seven_day": {"utilization": 46.0, "resets_at": "2026-07-31T04:59:59+00:00"},
+            "seven_day_opus": null,
+            "limits": [
+                {"kind": "session", "percent": 36, "resets_at": "2026-07-27T17:19:59+00:00", "scope": null},
+                {"kind": "weekly_all", "percent": 46, "resets_at": "2026-07-31T04:59:59+00:00", "scope": null},
+                {"kind": "weekly_scoped", "percent": 29, "resets_at": "2026-07-31T05:00:00+00:00",
+                 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+            ]
+        }"#;
+
+        let response: UsageResponse = serde_json::from_str(body).expect("payload should parse");
+        let scoped = scoped_weekly(&response.limits).expect("scoped limit should be found");
+
+        assert_eq!(scoped.label, "Fable");
+        assert_eq!(scoped.section.percentage, 29.0);
+        assert!(scoped.section.resets_at.is_some());
+    }
+
+    #[test]
+    fn ignores_a_scoped_limit_without_a_model_label() {
+        let body = r#"{
+            "limits": [
+                {"kind": "weekly_scoped", "percent": 29, "resets_at": null, "scope": {"model": null}}
+            ]
+        }"#;
+
+        let response: UsageResponse = serde_json::from_str(body).expect("payload should parse");
+        assert!(scoped_weekly(&response.limits).is_none());
+    }
+
+    #[test]
+    fn tolerates_a_payload_without_any_limits_array() {
+        let body = r#"{"five_hour": {"utilization": 1.0, "resets_at": null}}"#;
+        let response: UsageResponse = serde_json::from_str(body).expect("payload should parse");
+        assert!(scoped_weekly(&response.limits).is_none());
     }
 
     #[test]
