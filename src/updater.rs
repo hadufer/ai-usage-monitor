@@ -19,7 +19,7 @@ const DOWNLOAD_EXE_NAME: &str = "update-download.exe";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 // Keep this aligned with the package identifier used in winget-pkgs.
-const WINGET_PACKAGE_ID: &str = "CodeZeno.ClaudeCodeUsageMonitor";
+const WINGET_PACKAGE_ID: &str = "hadufer.ClaudeCodeUsageMonitor";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallChannel {
@@ -507,4 +507,31 @@ fn show_error_message(title: &str, message: &str) {
 
 fn wide_str(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_checks_target_this_fork_and_not_upstream() {
+        let (owner, repo) = github_repo().expect("repository should be configured");
+        assert_eq!(owner, "hadufer");
+        assert_eq!(repo, "Claude-Code-Usage-Monitor");
+    }
+
+    #[test]
+    fn the_winget_package_id_belongs_to_the_release_owner() {
+        let (owner, _) = github_repo().expect("repository should be configured");
+        assert!(
+            WINGET_PACKAGE_ID.starts_with(&format!("{owner}.")),
+            "winget id {WINGET_PACKAGE_ID} does not belong to {owner}"
+        );
+    }
+
+    #[test]
+    fn a_prerelease_suffix_would_never_read_as_newer() {
+        assert!(!is_version_newer("1.5.0-fork.1", "1.5.0"));
+        assert!(is_version_newer("1.5.1", "1.5.0"));
+    }
 }
