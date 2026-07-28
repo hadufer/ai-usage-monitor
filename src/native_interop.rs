@@ -1,5 +1,8 @@
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -24,10 +27,41 @@ pub const WM_APP: u32 = 0x8000;
 pub const WM_APP_USAGE_UPDATED: u32 = WM_APP + 1;
 pub const WM_APP_TRAY: u32 = WM_APP + 3;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct TaskbarWindow {
     pub hwnd: HWND,
     pub rect: RECT,
+    /// Display device name of the monitor this taskbar sits on, e.g.
+    /// `\\.\DISPLAY1`. Survives taskbar rebuilds, unlike a position in the
+    /// enumeration or a window handle.
+    pub device: Option<String>,
+}
+
+/// Display device name of the monitor a window is on.
+pub fn monitor_device_name(hwnd: HWND) -> Option<String> {
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if monitor.is_invalid() {
+            return None;
+        }
+
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        let ok = GetMonitorInfoW(monitor, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO);
+        if !ok.as_bool() {
+            return None;
+        }
+
+        let len = info
+            .szDevice
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(info.szDevice.len());
+        if len == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&info.szDevice[..len]))
+    }
 }
 
 pub fn find_taskbars() -> Vec<TaskbarWindow> {
@@ -39,7 +73,11 @@ pub fn find_taskbars() -> Vec<TaskbarWindow> {
             let class_name = String::from_utf16_lossy(&class_name[..len as usize]);
             if class_name == "Shell_TrayWnd" || class_name == "Shell_SecondaryTrayWnd" {
                 if let Some(rect) = get_taskbar_rect(hwnd).or_else(|| get_window_rect_safe(hwnd)) {
-                    taskbars.push(TaskbarWindow { hwnd, rect });
+                    taskbars.push(TaskbarWindow {
+                        hwnd,
+                        rect,
+                        device: monitor_device_name(hwnd),
+                    });
                 }
             }
         }

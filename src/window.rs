@@ -90,6 +90,7 @@ struct AppState {
     last_update_check_unix: Option<u64>,
 
     taskbar_index: usize,
+    taskbar_device: Option<String>,
     tray_offset: i32,
     dragging: bool,
     drag_start_mouse_x: i32,
@@ -148,6 +149,8 @@ const TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS: u64 = 750;
 /// How often the watchdog thread polls for an explorer.exe restart (which
 /// recreates the taskbar and wipes our tray-icon registration).
 const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
+/// Consecutive misses before the shell is considered to have really restarted.
+const TASKBAR_MISSES_BEFORE_RELAUNCH: u32 = 4;
 
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -241,22 +244,39 @@ fn relaunch_self() {
 /// dedicated thread (independent of the dead message loop) polls the taskbar
 /// handle and, when it changes, relaunches the widget as a fresh process.
 fn spawn_taskbar_watchdog() {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(TASKBAR_WATCH_INTERVAL_SECS));
-        let stored = {
-            let state = lock_state();
-            state.as_ref().and_then(|s| s.taskbar_hwnd)
-        };
-        // Only relevant once we have embedded into a taskbar at least once.
-        let Some(old) = stored else {
-            continue;
-        };
-        let taskbars = native_interop::find_taskbars();
-        if !taskbars.is_empty() && !taskbars.iter().any(|taskbar| taskbar.hwnd == old) {
-            let new = taskbars[0].hwnd;
+    std::thread::spawn(move || {
+        let mut consecutive_misses = 0_u32;
+        loop {
+            std::thread::sleep(Duration::from_secs(TASKBAR_WATCH_INTERVAL_SECS));
+            let stored = {
+                let state = lock_state();
+                state.as_ref().and_then(|s| s.taskbar_hwnd)
+            };
+            // Only relevant once we have embedded into a taskbar at least once.
+            let Some(old) = stored else {
+                continue;
+            };
+            let taskbars = native_interop::find_taskbars();
+            if taskbars.is_empty() || taskbars.iter().any(|taskbar| taskbar.hwnd == old) {
+                consecutive_misses = 0;
+                continue;
+            }
+
+            // A taskbar can vanish from the enumeration for a moment while the
+            // shell rebuilds it, and relaunching on that blink is what moved the
+            // widget to another screen. Only a sustained absence is a restart.
+            consecutive_misses += 1;
+            if consecutive_misses < TASKBAR_MISSES_BEFORE_RELAUNCH {
+                diagnose::log(format!(
+                    "watchdog: taskbar {:?} missing ({consecutive_misses}/{TASKBAR_MISSES_BEFORE_RELAUNCH}), waiting",
+                    old.0
+                ));
+                continue;
+            }
+
             diagnose::log(format!(
-                "watchdog: taskbar changed old={:?} new={:?} -> relaunching",
-                old.0, new.0
+                "watchdog: taskbar {:?} gone for {consecutive_misses} checks -> relaunching",
+                old.0
             ));
             relaunch_self();
         }
@@ -311,6 +331,10 @@ struct SettingsFile {
     tray_offset: i32,
     #[serde(default)]
     taskbar_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    taskbar_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scoped_label_last: Option<String>,
     #[serde(default = "default_poll_interval")]
     poll_interval_ms: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,6 +372,8 @@ impl Default for SettingsFile {
         Self {
             tray_offset: 0,
             taskbar_index: 0,
+            taskbar_device: None,
+            scoped_label_last: None,
             poll_interval_ms: default_poll_interval(),
             language: None,
             last_update_check_unix: None,
@@ -457,6 +483,12 @@ fn save_state_settings() {
         let mut settings = load_settings();
         settings.tray_offset = s.tray_offset;
         settings.taskbar_index = s.taskbar_index;
+        settings.taskbar_device = s.taskbar_device.clone();
+        settings.scoped_label_last = if s.scoped_label.is_empty() {
+            None
+        } else {
+            Some(s.scoped_label.clone())
+        };
         settings.poll_interval_ms = s.poll_interval_ms;
         settings.language = s
             .language_override
@@ -612,18 +644,56 @@ fn toggle_widget_visibility(hwnd: HWND) {
     }
 }
 
-fn attach_to_taskbar(hwnd: HWND, requested_index: usize) -> bool {
+/// Returns the taskbar to use and whether the remembered monitor was found.
+/// A false flag means the pick is a fallback and must not overwrite the
+/// remembered preference.
+fn select_taskbar(
+    taskbars: &[native_interop::TaskbarWindow],
+    requested_index: usize,
+    requested_device: Option<&str>,
+) -> (usize, bool) {
+    if let Some(device) = requested_device {
+        if let Some(index) = taskbars
+            .iter()
+            .position(|taskbar| taskbar.device.as_deref() == Some(device))
+        {
+            return (index, true);
+        }
+    }
+
+    (
+        requested_index.min(taskbars.len().saturating_sub(1)),
+        false,
+    )
+}
+
+/// Pick the taskbar to embed into. The remembered monitor wins over the
+/// remembered index: an index is a position in a list sorted by geometry, so it
+/// silently points at another screen whenever the enumeration is incomplete or
+/// the display layout changes.
+fn attach_to_taskbar(hwnd: HWND, requested_index: usize, requested_device: Option<&str>) -> bool {
     let taskbars = native_interop::find_taskbars();
     if taskbars.is_empty() {
         diagnose::log("taskbar not found; using fallback popup window");
         return false;
     }
 
-    let index = requested_index.min(taskbars.len().saturating_sub(1));
-    let taskbar = taskbars[index];
+    let (index, matched_device) =
+        select_taskbar(&taskbars, requested_index, requested_device);
+    if !matched_device {
+        if let Some(device) = requested_device {
+            diagnose::log(format!(
+                "remembered monitor {device} is absent from {} taskbar(s); falling back to index",
+                taskbars.len()
+            ));
+        }
+    }
+    let taskbar = taskbars[index].clone();
     diagnose::log(format!(
-        "taskbar selected index={index} count={} hwnd={:?} rect=({}, {}, {}, {})",
+        "taskbar selected index={index} count={} device={:?} matched_by={} hwnd={:?} rect=({}, {}, {}, {})",
         taskbars.len(),
+        taskbar.device,
+        if matched_device { "monitor" } else { "index" },
         taskbar.hwnd,
         taskbar.rect.left,
         taskbar.rect.top,
@@ -663,8 +733,13 @@ fn attach_to_taskbar(hwnd: HWND, requested_index: usize) -> bool {
         s.taskbar_hwnd = Some(taskbar.hwnd);
         s.tray_notify_hwnd = tray_notify;
         s.win_event_hook = hook;
-        s.taskbar_index = index;
         s.embedded = true;
+        // Only record the choice when it is one we can stand behind. A fallback
+        // pick would otherwise overwrite the preference with the wrong screen.
+        if matched_device || requested_device.is_none() {
+            s.taskbar_index = index;
+            s.taskbar_device = taskbar.device.clone();
+        }
     }
     true
 }
@@ -771,8 +846,9 @@ fn refresh_usage_texts(state: &mut AppState) {
                 state.scoped_label = scoped.label.clone();
             }
             None => {
+                // Keep the label, and therefore the row: dropping it would
+                // reflow the whole widget over one incomplete poll.
                 state.scoped_text = "--".to_string();
-                state.scoped_label = String::new();
             }
         }
     } else if state.show_claude_code {
@@ -1479,7 +1555,7 @@ pub fn run() {
                 antigravity_weekly_text: "--".to_string(),
                 scoped_percent: 0.0,
                 scoped_text: "--".to_string(),
-                scoped_label: String::new(),
+                scoped_label: settings.scoped_label_last.clone().unwrap_or_default(),
                 show_claude_code: settings.show_claude_code,
                 show_codex: settings.show_codex,
                 show_antigravity: settings.show_antigravity,
@@ -1496,6 +1572,7 @@ pub fn run() {
                 update_status: UpdateStatus::Idle,
                 last_update_check_unix: settings.last_update_check_unix,
                 taskbar_index: settings.taskbar_index,
+                taskbar_device: settings.taskbar_device.clone(),
                 tray_offset: settings.tray_offset,
                 dragging: false,
                 drag_start_mouse_x: 0,
@@ -1506,8 +1583,15 @@ pub fn run() {
         }
 
         // Try to embed in taskbar
-        if attach_to_taskbar(hwnd, settings.taskbar_index) {
+        if attach_to_taskbar(
+            hwnd,
+            settings.taskbar_index,
+            settings.taskbar_device.as_deref(),
+        ) {
             embedded = true;
+            // Record the monitor now, rather than waiting for whatever menu
+            // action happens to save next.
+            save_state_settings();
         }
 
         // If not embedded, fall back to topmost popup with SetLayeredWindowAttributes
@@ -2009,6 +2093,7 @@ fn do_poll(send_hwnd: SendHwnd) {
 
     match poller::poll(show_claude_code, show_codex, show_antigravity) {
         Ok(data) => {
+            let mut scoped_label_changed = false;
             let mut state = lock_state();
             if let Some(s) = state.as_mut() {
                 if let Some(claude_code) = data.claude_code.as_ref() {
@@ -2047,7 +2132,9 @@ fn do_poll(send_hwnd: SendHwnd) {
 
                 s.data = Some(data);
                 s.last_poll_ok = true;
+                let label_before = s.scoped_label.clone();
                 refresh_usage_texts(s);
+                scoped_label_changed = s.scoped_label != label_before;
 
                 // Recovered from errors — restore normal poll interval
                 if s.retry_count > 0 {
@@ -2061,6 +2148,11 @@ fn do_poll(send_hwnd: SendHwnd) {
                 s.auth_error_paused_polling = false;
                 s.auth_watch_mode = poller::CredentialWatchMode::ActiveSource;
                 s.auth_watch_snapshot.clear();
+            }
+
+            drop(state);
+            if scoped_label_changed {
+                save_state_settings();
             }
 
             unsafe {
@@ -2735,7 +2827,10 @@ unsafe extern "system" fn wnd_proc(
                                 s.tray_offset = new_offset;
                             }
                         }
-                        if attach_to_taskbar(hwnd, target_index) {
+                        // Dragging onto another taskbar is an explicit choice, so
+                        // the remembered monitor is deliberately not consulted:
+                        // the index decides, and the new monitor is recorded.
+                        if attach_to_taskbar(hwnd, target_index, None) {
                             position_at_taskbar();
                             render_layered();
                         }
@@ -3613,5 +3708,61 @@ fn draw_rounded_rect(hdc: HDC, rect: &RECT, color: &Color, radius: i32) {
         let _ = FillRgn(hdc, rgn, brush);
         let _ = DeleteObject(rgn);
         let _ = DeleteObject(brush);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::RECT;
+
+    fn taskbar(device: &str, left: i32) -> native_interop::TaskbarWindow {
+        native_interop::TaskbarWindow {
+            hwnd: HWND::default(),
+            rect: RECT {
+                left,
+                top: 1032,
+                right: left + 1920,
+                bottom: 1080,
+            },
+            device: Some(device.to_string()),
+        }
+    }
+
+    #[test]
+    fn the_remembered_monitor_wins_over_a_stale_index() {
+        let taskbars = vec![taskbar(r"\.\DISPLAY2", 0), taskbar(r"\.\DISPLAY1", 1920)];
+        let (index, matched) = select_taskbar(&taskbars, 0, Some(r"\.\DISPLAY1"));
+        assert_eq!(index, 1);
+        assert!(matched);
+    }
+
+    /// The reported bug: the shell rebuilt the chosen screen's taskbar, so the
+    /// enumeration briefly held only the other screen and index 0 moved the
+    /// widget there. The pick must be flagged as a fallback so it cannot be
+    /// persisted over the real preference.
+    #[test]
+    fn an_incomplete_enumeration_is_reported_as_a_fallback() {
+        let only_the_other_screen = vec![taskbar(r"\.\DISPLAY2", 1920)];
+        let (index, matched) = select_taskbar(&only_the_other_screen, 0, Some(r"\.\DISPLAY1"));
+        assert_eq!(index, 0);
+        assert!(
+            !matched,
+            "picking another monitor must not count as matching the remembered one"
+        );
+    }
+
+    #[test]
+    fn an_explicit_choice_uses_the_index_and_counts_as_deliberate() {
+        let taskbars = vec![taskbar(r"\.\DISPLAY1", 0), taskbar(r"\.\DISPLAY2", 1920)];
+        let (index, matched) = select_taskbar(&taskbars, 1, None);
+        assert_eq!(index, 1);
+        assert!(!matched);
+    }
+
+    #[test]
+    fn an_out_of_range_index_is_clamped() {
+        let taskbars = vec![taskbar(r"\.\DISPLAY1", 0)];
+        assert_eq!(select_taskbar(&taskbars, 5, None), (0, false));
     }
 }
