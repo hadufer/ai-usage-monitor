@@ -91,6 +91,7 @@ struct AppState {
 
     taskbar_index: usize,
     taskbar_device: Option<String>,
+    pin_to_primary_taskbar: bool,
     tray_offset: i32,
     dragging: bool,
     drag_start_mouse_x: i32,
@@ -144,13 +145,22 @@ const IDM_MODEL_ANTIGRAVITY: u16 = 62;
 
 const WM_DPICHANGED_MSG: u32 = 0x02E0;
 const WM_APP_UPDATE_CHECK_COMPLETE: u32 = WM_APP + 2;
+/// Asks the UI thread to re-run the taskbar choice. Re-parenting a window from
+/// the watchdog thread is not safe, so the request is posted instead.
+const WM_APP_REATTACH: u32 = WM_APP + 4;
 const TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS: u64 = 750;
 
 /// How often the watchdog thread polls for an explorer.exe restart (which
 /// recreates the taskbar and wipes our tray-icon registration).
 const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
-/// Consecutive misses before the shell is considered to have really restarted.
-const TASKBAR_MISSES_BEFORE_RELAUNCH: u32 = 4;
+/// Consecutive misses before the taskbar is treated as replaced rather than
+/// mid-rebuild. Locking the session was measured hiding it for about six
+/// seconds, so this leaves room above that.
+const TASKBAR_MISSES_BEFORE_REATTACH: u32 = 6;
+/// Consecutive checks on the wrong screen before moving back. Locking the
+/// session, or attaching over RDP, reshuffles which monitor is primary for a
+/// few seconds, and reacting inside that window would land us anywhere.
+const WRONG_SCREEN_CHECKS_BEFORE_MOVE: u32 = 3;
 
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -246,6 +256,7 @@ fn relaunch_self() {
 fn spawn_taskbar_watchdog() {
     std::thread::spawn(move || {
         let mut consecutive_misses = 0_u32;
+        let mut wrong_screen_checks = 0_u32;
         loop {
             std::thread::sleep(Duration::from_secs(TASKBAR_WATCH_INTERVAL_SECS));
             let stored = {
@@ -256,29 +267,82 @@ fn spawn_taskbar_watchdog() {
             let Some(old) = stored else {
                 continue;
             };
+            // Explorer taking the taskbar down destroys our child window with
+            // it, and that is the only signal that actually requires a new
+            // process: the message loop cannot recover in-process. A taskbar
+            // handle merely absent from the enumeration is a rebuild in
+            // progress, which is recoverable by re-attaching.
+            let our_hwnd = {
+                let state = lock_state();
+                match state.as_ref() {
+                    Some(s) => s.hwnd.to_hwnd(),
+                    None => continue,
+                }
+            };
+            if unsafe { !IsWindow(our_hwnd).as_bool() } {
+                diagnose::log("watchdog: our window is gone -> relaunching");
+                relaunch_self();
+                continue;
+            }
+
             let taskbars = native_interop::find_taskbars();
-            if taskbars.is_empty() || taskbars.iter().any(|taskbar| taskbar.hwnd == old) {
+            if taskbars.is_empty() {
                 consecutive_misses = 0;
                 continue;
             }
 
-            // A taskbar can vanish from the enumeration for a moment while the
-            // shell rebuilds it, and relaunching on that blink is what moved the
-            // widget to another screen. Only a sustained absence is a restart.
+            if let Some(current) = taskbars.iter().find(|taskbar| taskbar.hwnd == old) {
+                consecutive_misses = 0;
+
+                // A session lock, or an RDP attach, tears the secondary
+                // taskbars down and rebuilds them; the widget can be left on a
+                // screen that is no longer the one it was pinned to. Existing
+                // is not enough, it has to be the right screen.
+                let pinned = {
+                    let state = lock_state();
+                    match state.as_ref() {
+                        Some(s) => s.pin_to_primary_taskbar,
+                        None => continue,
+                    }
+                };
+                if should_move_back_to_primary(current, &taskbars, pinned) {
+                    wrong_screen_checks += 1;
+                    if wrong_screen_checks >= WRONG_SCREEN_CHECKS_BEFORE_MOVE {
+                        wrong_screen_checks = 0;
+                        diagnose::log(format!(
+                            "watchdog: pinned widget sits on {:?}, primary is elsewhere -> re-attaching",
+                            current.device
+                        ));
+                        unsafe {
+                            let _ = PostMessageW(our_hwnd, WM_APP_REATTACH, WPARAM(0), LPARAM(0));
+                        }
+                    }
+                } else {
+                    wrong_screen_checks = 0;
+                }
+                continue;
+            }
+
+            // Our window is alive, so the shell is rebuilding rather than
+            // restarting: wait for the churn to settle, then re-attach in place.
+            // No new process, so nothing blinks.
             consecutive_misses += 1;
-            if consecutive_misses < TASKBAR_MISSES_BEFORE_RELAUNCH {
+            if consecutive_misses < TASKBAR_MISSES_BEFORE_REATTACH {
                 diagnose::log(format!(
-                    "watchdog: taskbar {:?} missing ({consecutive_misses}/{TASKBAR_MISSES_BEFORE_RELAUNCH}), waiting",
+                    "watchdog: taskbar {:?} missing ({consecutive_misses}/{TASKBAR_MISSES_BEFORE_REATTACH}), waiting",
                     old.0
                 ));
                 continue;
             }
 
+            consecutive_misses = 0;
             diagnose::log(format!(
-                "watchdog: taskbar {:?} gone for {consecutive_misses} checks -> relaunching",
+                "watchdog: taskbar {:?} replaced -> re-attaching",
                 old.0
             ));
-            relaunch_self();
+            unsafe {
+                let _ = PostMessageW(our_hwnd, WM_APP_REATTACH, WPARAM(0), LPARAM(0));
+            }
         }
     });
 }
@@ -333,6 +397,8 @@ struct SettingsFile {
     taskbar_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     taskbar_device: Option<String>,
+    #[serde(default = "default_true")]
+    pin_to_primary_taskbar: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scoped_label_last: Option<String>,
     #[serde(default = "default_poll_interval")]
@@ -373,6 +439,7 @@ impl Default for SettingsFile {
             tray_offset: 0,
             taskbar_index: 0,
             taskbar_device: None,
+            pin_to_primary_taskbar: true,
             scoped_label_last: None,
             poll_interval_ms: default_poll_interval(),
             language: None,
@@ -484,6 +551,7 @@ fn save_state_settings() {
         settings.tray_offset = s.tray_offset;
         settings.taskbar_index = s.taskbar_index;
         settings.taskbar_device = s.taskbar_device.clone();
+        settings.pin_to_primary_taskbar = s.pin_to_primary_taskbar;
         settings.scoped_label_last = if s.scoped_label.is_empty() {
             None
         } else {
@@ -644,6 +712,21 @@ fn toggle_widget_visibility(hwnd: HWND) {
     }
 }
 
+/// Whether a pinned widget has ended up on the wrong screen and a correct one
+/// is available. While a session is locked or an RDP attach is in flight,
+/// Windows can report no primary monitor at all: moving then would land the
+/// widget anywhere, so an absent primary means stay put.
+fn should_move_back_to_primary(
+    current: &native_interop::TaskbarWindow,
+    taskbars: &[native_interop::TaskbarWindow],
+    pinned: bool,
+) -> bool {
+    if !pinned || current.is_primary {
+        return false;
+    }
+    taskbars.iter().any(|taskbar| taskbar.is_primary)
+}
+
 /// Returns the taskbar to use and whether the remembered monitor was found.
 /// A false flag means the pick is a fallback and must not overwrite the
 /// remembered preference.
@@ -651,7 +734,16 @@ fn select_taskbar(
     taskbars: &[native_interop::TaskbarWindow],
     requested_index: usize,
     requested_device: Option<&str>,
+    pin_to_primary: bool,
 ) -> (usize, bool) {
+    // Pinning wins over everything: the primary monitor is an identity Windows
+    // itself maintains, so it cannot drift the way an index or a handle does.
+    if pin_to_primary {
+        if let Some(index) = taskbars.iter().position(|taskbar| taskbar.is_primary) {
+            return (index, true);
+        }
+    }
+
     if let Some(device) = requested_device {
         if let Some(index) = taskbars
             .iter()
@@ -671,7 +763,12 @@ fn select_taskbar(
 /// remembered index: an index is a position in a list sorted by geometry, so it
 /// silently points at another screen whenever the enumeration is incomplete or
 /// the display layout changes.
-fn attach_to_taskbar(hwnd: HWND, requested_index: usize, requested_device: Option<&str>) -> bool {
+fn attach_to_taskbar(
+    hwnd: HWND,
+    requested_index: usize,
+    requested_device: Option<&str>,
+    pin_to_primary: bool,
+) -> bool {
     let taskbars = native_interop::find_taskbars();
     if taskbars.is_empty() {
         diagnose::log("taskbar not found; using fallback popup window");
@@ -679,7 +776,7 @@ fn attach_to_taskbar(hwnd: HWND, requested_index: usize, requested_device: Optio
     }
 
     let (index, matched_device) =
-        select_taskbar(&taskbars, requested_index, requested_device);
+        select_taskbar(&taskbars, requested_index, requested_device, pin_to_primary);
     if !matched_device {
         if let Some(device) = requested_device {
             diagnose::log(format!(
@@ -690,9 +787,10 @@ fn attach_to_taskbar(hwnd: HWND, requested_index: usize, requested_device: Optio
     }
     let taskbar = taskbars[index].clone();
     diagnose::log(format!(
-        "taskbar selected index={index} count={} device={:?} matched_by={} hwnd={:?} rect=({}, {}, {}, {})",
+        "taskbar selected index={index} count={} device={:?} primary={} pinned={pin_to_primary} matched_by={} hwnd={:?} rect=({}, {}, {}, {})",
         taskbars.len(),
         taskbar.device,
+        taskbar.is_primary,
         if matched_device { "monitor" } else { "index" },
         taskbar.hwnd,
         taskbar.rect.left,
@@ -1573,6 +1671,7 @@ pub fn run() {
                 last_update_check_unix: settings.last_update_check_unix,
                 taskbar_index: settings.taskbar_index,
                 taskbar_device: settings.taskbar_device.clone(),
+                pin_to_primary_taskbar: settings.pin_to_primary_taskbar,
                 tray_offset: settings.tray_offset,
                 dragging: false,
                 drag_start_mouse_x: 0,
@@ -1587,6 +1686,7 @@ pub fn run() {
             hwnd,
             settings.taskbar_index,
             settings.taskbar_device.as_deref(),
+            settings.pin_to_primary_taskbar,
         ) {
             embedded = true;
             // Record the monitor now, rather than waiting for whatever menu
@@ -2663,6 +2763,25 @@ unsafe extern "system" fn wnd_proc(
             schedule_auto_update_check(hwnd);
             LRESULT(0)
         }
+        WM_APP_REATTACH => {
+            let (index, device, pinned) = {
+                let state = lock_state();
+                match state.as_ref() {
+                    Some(s) => (
+                        s.taskbar_index,
+                        s.taskbar_device.clone(),
+                        s.pin_to_primary_taskbar,
+                    ),
+                    None => return LRESULT(0),
+                }
+            };
+            if attach_to_taskbar(hwnd, index, device.as_deref(), pinned) {
+                save_state_settings();
+                position_at_taskbar();
+                render_layered();
+            }
+            LRESULT(0)
+        }
         WM_SETCURSOR => {
             let is_dragging = {
                 let state = lock_state();
@@ -2830,7 +2949,17 @@ unsafe extern "system" fn wnd_proc(
                         // Dragging onto another taskbar is an explicit choice, so
                         // the remembered monitor is deliberately not consulted:
                         // the index decides, and the new monitor is recorded.
-                        if attach_to_taskbar(hwnd, target_index, None) {
+                        let dropped_on_primary = native_interop::find_taskbars()
+                            .get(target_index)
+                            .map(|taskbar| taskbar.is_primary)
+                            .unwrap_or(false);
+                        {
+                            let mut state = lock_state();
+                            if let Some(s) = state.as_mut() {
+                                s.pin_to_primary_taskbar = dropped_on_primary;
+                            }
+                        }
+                        if attach_to_taskbar(hwnd, target_index, None, false) {
                             position_at_taskbar();
                             render_layered();
                         }
@@ -3717,6 +3846,10 @@ mod tests {
     use windows::Win32::Foundation::RECT;
 
     fn taskbar(device: &str, left: i32) -> native_interop::TaskbarWindow {
+        screen(device, left, false)
+    }
+
+    fn screen(device: &str, left: i32, is_primary: bool) -> native_interop::TaskbarWindow {
         native_interop::TaskbarWindow {
             hwnd: HWND::default(),
             rect: RECT {
@@ -3726,13 +3859,14 @@ mod tests {
                 bottom: 1080,
             },
             device: Some(device.to_string()),
+            is_primary,
         }
     }
 
     #[test]
     fn the_remembered_monitor_wins_over_a_stale_index() {
         let taskbars = vec![taskbar(r"\.\DISPLAY2", 0), taskbar(r"\.\DISPLAY1", 1920)];
-        let (index, matched) = select_taskbar(&taskbars, 0, Some(r"\.\DISPLAY1"));
+        let (index, matched) = select_taskbar(&taskbars, 0, Some(r"\.\DISPLAY1"), false);
         assert_eq!(index, 1);
         assert!(matched);
     }
@@ -3744,7 +3878,7 @@ mod tests {
     #[test]
     fn an_incomplete_enumeration_is_reported_as_a_fallback() {
         let only_the_other_screen = vec![taskbar(r"\.\DISPLAY2", 1920)];
-        let (index, matched) = select_taskbar(&only_the_other_screen, 0, Some(r"\.\DISPLAY1"));
+        let (index, matched) = select_taskbar(&only_the_other_screen, 0, Some(r"\.\DISPLAY1"), false);
         assert_eq!(index, 0);
         assert!(
             !matched,
@@ -3755,14 +3889,70 @@ mod tests {
     #[test]
     fn an_explicit_choice_uses_the_index_and_counts_as_deliberate() {
         let taskbars = vec![taskbar(r"\.\DISPLAY1", 0), taskbar(r"\.\DISPLAY2", 1920)];
-        let (index, matched) = select_taskbar(&taskbars, 1, None);
+        let (index, matched) = select_taskbar(&taskbars, 1, None, false);
         assert_eq!(index, 1);
         assert!(!matched);
+    }
+
+    /// What the user asked for: the widget stays on the primary screen whatever
+    /// the enumeration order, the stale index or the remembered device say.
+    #[test]
+    fn pinning_beats_a_stale_index_and_a_stale_device() {
+        let taskbars = vec![
+            screen(r"\.\DISPLAY2", 0, false),
+            screen(r"\.\DISPLAY1", 1920, true),
+        ];
+        let (index, matched) = select_taskbar(&taskbars, 0, Some(r"\.\DISPLAY2"), true);
+        assert_eq!(index, 1, "must land on the primary monitor");
+        assert!(matched);
+    }
+
+    #[test]
+    fn pinning_falls_back_when_no_primary_is_reported() {
+        let taskbars = vec![screen(r"\.\DISPLAY2", 0, false)];
+        let (index, matched) = select_taskbar(&taskbars, 0, None, true);
+        assert_eq!(index, 0);
+        assert!(!matched, "a fallback pick must not be recorded as the preference");
+    }
+
+    /// The reported scenario: locking the session rebuilds the taskbars and can
+    /// leave the pinned widget on the secondary screen.
+    #[test]
+    fn a_pinned_widget_stranded_on_the_secondary_screen_moves_back() {
+        let secondary = screen("SECOND", 1920, false);
+        let taskbars = vec![screen("MAIN", 0, true), secondary.clone()];
+        assert!(should_move_back_to_primary(&secondary, &taskbars, true));
+    }
+
+    /// Mid-transition Windows may report no primary at all. Moving then would
+    /// pick an arbitrary screen, so nothing should happen.
+    #[test]
+    fn no_primary_reported_means_stay_put() {
+        let secondary = screen("SECOND", 1920, false);
+        let taskbars = vec![secondary.clone()];
+        assert!(!should_move_back_to_primary(&secondary, &taskbars, true));
+    }
+
+    #[test]
+    fn already_on_the_primary_screen_is_left_alone() {
+        let main = screen("MAIN", 0, true);
+        let taskbars = vec![main.clone(), screen("SECOND", 1920, false)];
+        assert!(!should_move_back_to_primary(&main, &taskbars, true));
+    }
+
+    #[test]
+    fn an_unpinned_widget_is_never_moved_back() {
+        let secondary = screen("SECOND", 1920, false);
+        let taskbars = vec![screen("MAIN", 0, true), secondary.clone()];
+        assert!(
+            !should_move_back_to_primary(&secondary, &taskbars, false),
+            "a deliberate drag to another screen must be respected"
+        );
     }
 
     #[test]
     fn an_out_of_range_index_is_clamped() {
         let taskbars = vec![taskbar(r"\.\DISPLAY1", 0)];
-        assert_eq!(select_taskbar(&taskbars, 5, None), (0, false));
+        assert_eq!(select_taskbar(&taskbars, 5, None, false), (0, false));
     }
 }
