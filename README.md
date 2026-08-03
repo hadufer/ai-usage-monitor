@@ -54,9 +54,19 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 
 ## Install
 
-Download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it. Nothing else to install.
+Download **`claude-code-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it. It installs under your own profile, so it never asks for administrator rights, and it gives you a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally puts the command on your `PATH`.
 
-A WinGet package is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/408338). Once it is merged, this will work:
+If you would rather keep it portable, `claude-code-usage-monitor.exe` from the same page runs on its own with nothing installed.
+
+Both are built by CI from the tagged commit. Neither is code-signed, so Windows SmartScreen will warn you the first time: choose **More info** then **Run anyway**, or check the SHA256 against the release notes if you prefer.
+
+The installer takes the usual silent switches, if you are deploying it:
+
+```powershell
+claude-code-usage-monitor-setup.exe /SILENT /NORESTART
+```
+
+A WinGet package is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/408338). Once it is merged, this will work too:
 
 ```powershell
 winget install hadufer.ClaudeCodeUsageMonitor

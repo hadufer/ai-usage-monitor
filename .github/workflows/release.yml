@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  # Lets an existing tag be rebuilt, so a packaging change can be published
+  # without inventing a version for it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach assets to (e.g. v1.5.3)"
+        required: true
 
 permissions:
   contents: write
@@ -19,16 +26,44 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
         run: cargo build --release
 
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ("${{ inputs.tag }}") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            winget install --id JRSoftware.InnoSetup --exact --silent `
+              --accept-source-agreements --accept-package-agreements
+            $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}", "$env:LOCALAPPDATA\Programs" `
+              -Filter ISCC.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName)
+          }
+          if (-not $iscc) { throw "Inno Setup compiler not found" }
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" `
+            "/Oinstaller/out" "installer/claude-code-usage-monitor.iss"
+          if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/claude-code-usage-monitor.exe
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            target/release/claude-code-usage-monitor.exe
+            installer/out/claude-code-usage-monitor-setup.exe
           generate_release_notes: true
 
   winget:
@@ -40,7 +75,7 @@ jobs:
       - name: Prepare release metadata
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = if ("${{ inputs.tag }}") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           $version = $tag.TrimStart('v')
           $packageUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ env.RELEASE_ASSET_NAME }}"
 
