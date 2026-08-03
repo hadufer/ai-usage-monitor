@@ -49,4 +49,5 @@ pub(super) const STRINGS: Strings = Strings {
     second_suffix: "초",
     pace_colors: "속도에 따라 색상 지정",
     scoped_weekly_row: "모델별 주간 행",
+    auto_install_updates: "업데이트 자동 설치",
 };

@@ -96,6 +96,8 @@ struct AppState {
     taskbar_index: usize,
     taskbar_device: Option<String>,
     pin_to_primary_taskbar: bool,
+    auto_install_updates: bool,
+    update_check_interval_hours: u64,
     tray_offset: i32,
     dragging: bool,
     drag_start_mouse_x: i32,
@@ -143,6 +145,7 @@ const IDM_LANG_PORTUGUESE_BRAZIL: u16 = 50;
 const IDM_LANG_SIMPLIFIED_CHINESE: u16 = 51;
 const IDM_PACE_COLORS: u16 = 32;
 const IDM_SCOPED_WEEKLY_ROW: u16 = 33;
+const IDM_AUTO_INSTALL_UPDATES: u16 = 34;
 const IDM_MODEL_CLAUDE_CODE: u16 = 60;
 const IDM_MODEL_CODEX: u16 = 61;
 const IDM_MODEL_ANTIGRAVITY: u16 = 62;
@@ -462,6 +465,10 @@ struct SettingsFile {
     unreadable: bool,
     #[serde(default = "default_true")]
     pace_colors: bool,
+    #[serde(default = "default_true")]
+    auto_install_updates: bool,
+    #[serde(default = "default_update_check_interval_hours")]
+    update_check_interval_hours: u64,
     #[serde(default = "default_pace_on_track")]
     pace_on_track: f64,
     #[serde(default = "default_pace_at_risk")]
@@ -494,6 +501,8 @@ impl Default for SettingsFile {
             show_scoped_weekly: true,
             unreadable: false,
             pace_colors: true,
+            auto_install_updates: true,
+            update_check_interval_hours: default_update_check_interval_hours(),
             pace_on_track: default_pace_on_track(),
             pace_at_risk: default_pace_at_risk(),
             pace_min_elapsed_fraction: default_pace_min_elapsed_fraction(),
@@ -510,6 +519,10 @@ fn default_poll_interval() -> u32 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_update_check_interval_hours() -> u64 {
+    24
 }
 
 fn default_pace_on_track() -> f64 {
@@ -640,6 +653,8 @@ fn save_state_settings() {
         settings.show_antigravity = s.show_antigravity;
         settings.show_scoped_weekly = s.show_scoped_weekly;
         settings.pace_colors = s.pace.enabled;
+        settings.auto_install_updates = s.auto_install_updates;
+        settings.update_check_interval_hours = s.update_check_interval_hours;
     }
     save_settings(&settings);
 }
@@ -991,16 +1006,18 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
-fn update_check_interval() -> Duration {
-    Duration::from_secs(24 * 60 * 60)
+/// Clamped so a hand-edited file cannot turn the check into a hot loop against
+/// the GitHub API, nor push it so far out that it never runs.
+fn update_check_interval(hours: u64) -> Duration {
+    Duration::from_secs(hours.clamp(1, 24 * 30) * 60 * 60)
 }
 
-fn auto_update_check_due(last_update_check_unix: Option<u64>) -> bool {
+fn auto_update_check_due(last_update_check_unix: Option<u64>, hours: u64) -> bool {
     let Some(last_update_check_unix) = last_update_check_unix else {
         return true;
     };
 
-    now_unix_secs().saturating_sub(last_update_check_unix) >= update_check_interval().as_secs()
+    now_unix_secs().saturating_sub(last_update_check_unix) >= update_check_interval(hours).as_secs()
 }
 
 fn schedule_auto_update_check(hwnd: HWND) {
@@ -1010,11 +1027,13 @@ fn schedule_auto_update_check(hwnd: HWND) {
             return;
         };
 
-        if auto_update_check_due(s.last_update_check_unix) {
+        if auto_update_check_due(s.last_update_check_unix, s.update_check_interval_hours) {
             None
         } else {
             let elapsed = now_unix_secs().saturating_sub(s.last_update_check_unix.unwrap_or(0));
-            let remaining_secs = update_check_interval().as_secs().saturating_sub(elapsed);
+            let remaining_secs = update_check_interval(s.update_check_interval_hours)
+                .as_secs()
+                .saturating_sub(elapsed);
             Some((remaining_secs.saturating_mul(1000)).min(u32::MAX as u64) as u32)
         }
     };
@@ -1340,10 +1359,34 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
                     }
                 }
                 save_state_settings();
-                if interactive && show_update_prompt(hwnd, strings, &release) {
+
+                let auto_install = {
+                    let state = lock_state();
+                    state.as_ref().map(|s| s.auto_install_updates).unwrap_or(false)
+                };
+
+                if interactive {
+                    if show_update_prompt(hwnd, strings, &release) {
+                        match install_channel {
+                            InstallChannel::Portable => begin_update_apply(hwnd, release),
+                            InstallChannel::Winget => begin_winget_update(hwnd),
+                        }
+                    }
+                } else if auto_install {
                     match install_channel {
-                        InstallChannel::Portable => begin_update_apply(hwnd, release),
-                        InstallChannel::Winget => begin_winget_update(hwnd),
+                        // Only portable installs update themselves. A WinGet copy
+                        // is updated through WinGet, which opens a console window
+                        // and has no business appearing unattended.
+                        InstallChannel::Portable => {
+                            diagnose::log(format!(
+                                "auto-installing update {}",
+                                release.latest_version
+                            ));
+                            begin_update_apply(hwnd, release);
+                        }
+                        InstallChannel::Winget => diagnose::log(
+                            "update available; leaving it to WinGet rather than self-updating",
+                        ),
                     }
                 }
                 unsafe {
@@ -1878,6 +1921,8 @@ pub fn run() {
                 taskbar_index: settings.taskbar_index,
                 taskbar_device: settings.taskbar_device.clone(),
                 pin_to_primary_taskbar: settings.pin_to_primary_taskbar.unwrap_or(true),
+                auto_install_updates: settings.auto_install_updates,
+                update_check_interval_hours: settings.update_check_interval_hours,
                 tray_offset: settings.tray_offset,
                 dragging: false,
                 drag_start_mouse_x: 0,
@@ -1958,7 +2003,9 @@ pub fn run() {
             let state = lock_state();
             state
                 .as_ref()
-                .map(|s| auto_update_check_due(s.last_update_check_unix))
+                .map(|s| {
+                    auto_update_check_due(s.last_update_check_unix, s.update_check_interval_hours)
+                })
                 .unwrap_or(false)
         };
         if should_check_updates {
@@ -3287,6 +3334,18 @@ unsafe extern "system" fn wnd_proc(
                     // Reset the poll timer with the new interval
                     SetTimer(hwnd, TIMER_POLL, new_interval, None);
                 }
+                IDM_AUTO_INSTALL_UPDATES => {
+                    {
+                        let mut state = lock_state();
+                        if let Some(s) = state.as_mut() {
+                            s.auto_install_updates = !s.auto_install_updates;
+                        }
+                    }
+                    save_state_settings();
+                    // Turning it on should not wait for the next interval to
+                    // elapse before it ever acts.
+                    schedule_auto_update_check(hwnd);
+                }
                 IDM_PACE_COLORS | IDM_SCOPED_WEEKLY_ROW => {
                     {
                         let mut state = lock_state();
@@ -3432,6 +3491,7 @@ fn show_context_menu(hwnd: HWND) {
             pace_colors_enabled,
             show_scoped_weekly,
             scoped_label,
+            auto_install_updates,
         ) = {
             let state = lock_state();
             match state.as_ref() {
@@ -3449,6 +3509,7 @@ fn show_context_menu(hwnd: HWND) {
                     s.pace.enabled,
                     s.show_scoped_weekly,
                     s.scoped_label.clone(),
+                    s.auto_install_updates,
                 ),
                 None => (
                     POLL_15_MIN,
@@ -3464,6 +3525,7 @@ fn show_context_menu(hwnd: HWND) {
                     true,
                     true,
                     String::new(),
+                    true,
                 ),
             }
         };
@@ -3602,6 +3664,19 @@ fn show_context_menu(hwnd: HWND) {
             scoped_row_flags,
             IDM_SCOPED_WEEKLY_ROW as usize,
             PCWSTR::from_raw(scoped_row_str.as_ptr()),
+        );
+
+        let auto_updates_str = native_interop::wide_str(strings.auto_install_updates);
+        let auto_updates_flags = if auto_install_updates {
+            MF_CHECKED
+        } else {
+            MENU_ITEM_FLAGS(0)
+        };
+        let _ = AppendMenuW(
+            settings_menu,
+            auto_updates_flags,
+            IDM_AUTO_INSTALL_UPDATES as usize,
+            PCWSTR::from_raw(auto_updates_str.as_ptr()),
         );
 
         let reset_pos_str = native_interop::wide_str(strings.reset_position);

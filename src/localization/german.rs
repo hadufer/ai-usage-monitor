@@ -49,4 +49,5 @@ pub(super) const STRINGS: Strings = Strings {
     second_suffix: "s",
     pace_colors: "Farbe nach Verbrauchstempo",
     scoped_weekly_row: "Wochenzeile pro Modell",
+    auto_install_updates: "Updates automatisch installieren",
 };

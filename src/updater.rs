@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +8,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Security::Cryptography::{
+    BCryptCloseAlgorithmProvider, BCryptHash, BCryptOpenAlgorithmProvider, BCRYPT_ALG_HANDLE,
+    BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS, BCRYPT_SHA256_ALGORITHM,
+};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
@@ -31,6 +35,8 @@ pub enum InstallChannel {
 pub struct ReleaseDescriptor {
     pub latest_version: String,
     asset_url: String,
+    asset_name: String,
+    checksum_url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -50,6 +56,9 @@ struct GitHubAsset {
     name: String,
     browser_download_url: String,
 }
+
+/// Name of the checksum asset the release workflow publishes.
+const CHECKSUM_ASSET_NAME: &str = "SHA256SUMS.txt";
 
 pub fn handle_cli_mode(args: &[String]) -> Option<i32> {
     if args.len() == 5 && args[1] == "--apply-update" {
@@ -129,7 +138,7 @@ pub fn begin_self_update(release: &ReleaseDescriptor) -> Result<(), String> {
         let _ = std::fs::remove_file(&partial_download_path);
     }
 
-    download_release_asset(&release.asset_url, &partial_download_path, &download_path)?;
+    download_release_asset(release, &partial_download_path, &download_path)?;
     std::fs::copy(&current_exe, &helper_path)
         .map_err(|e| format!("Unable to prepare updater helper: {e}"))?;
 
@@ -204,10 +213,74 @@ fn fetch_latest_release() -> Result<Option<ReleaseDescriptor>, String> {
             "No Windows executable asset was found in the latest release.".to_string()
         })?;
 
+    // An update replaces the running executable, so the download location is not
+    // taken on trust from the response: it has to live under this repository's
+    // own releases.
+    if !is_own_release_asset(&asset.browser_download_url, owner, repo) {
+        return Err(format!(
+            "release asset is not hosted under {owner}/{repo}: {}",
+            asset.browser_download_url
+        ));
+    }
+
+    let checksum_url = release
+        .assets
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(CHECKSUM_ASSET_NAME))
+        .map(|candidate| candidate.browser_download_url.clone());
+
     Ok(Some(ReleaseDescriptor {
         latest_version,
         asset_url: asset.browser_download_url.clone(),
+        asset_name: asset.name.clone(),
+        checksum_url,
     }))
+}
+
+/// Whether a download URL belongs to this repository's release storage.
+fn is_own_release_asset(url: &str, owner: &str, repo: &str) -> bool {
+    let expected = format!("https://github.com/{owner}/{repo}/releases/download/");
+    url.starts_with(&expected)
+}
+
+/// Pull the expected digest for `asset_name` out of a `sha256sum`-style listing.
+fn expected_digest(listing: &str, asset_name: &str) -> Option<String> {
+    listing.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let digest = parts.next()?;
+        let name = parts.next()?.trim_start_matches('*');
+        if name.eq_ignore_ascii_case(asset_name) && digest.len() == 64 {
+            Some(digest.to_ascii_lowercase())
+        } else {
+            None
+        }
+    })
+}
+
+/// SHA-256 through the platform's own provider, to avoid pulling a crypto crate
+/// into a dependency tree this small.
+fn sha256_hex(bytes: &[u8]) -> Result<String, String> {
+    unsafe {
+        let mut algorithm = BCRYPT_ALG_HANDLE::default();
+        let status = BCryptOpenAlgorithmProvider(
+            &mut algorithm,
+            BCRYPT_SHA256_ALGORITHM,
+            PCWSTR::null(),
+            BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS(0),
+        );
+        if status.is_err() {
+            return Err(format!("unable to open the SHA-256 provider: {status:?}"));
+        }
+
+        let mut digest = [0u8; 32];
+        let status = BCryptHash(algorithm, None, bytes, &mut digest);
+        let _ = BCryptCloseAlgorithmProvider(algorithm, 0);
+        if status.is_err() {
+            return Err(format!("unable to hash the download: {status:?}"));
+        }
+
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
 }
 
 fn build_agent() -> Result<ureq::Agent, String> {
@@ -219,22 +292,62 @@ fn build_agent() -> Result<ureq::Agent, String> {
         .build())
 }
 
-fn download_release_asset(url: &str, partial_path: &Path, final_path: &Path) -> Result<(), String> {
+fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, String> {
     let agent = build_agent()?;
     let response = agent
         .get(url)
         .set("User-Agent", user_agent())
         .call()
-        .map_err(|e| format!("Unable to download the latest release: {e}"))?;
+        .map_err(|e| format!("Unable to download {url}: {e}"))?;
 
-    let mut reader = response.into_reader();
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Unable to read {url}: {e}"))?;
+    Ok(bytes)
+}
+
+/// Download, verify, and only then put the file where the helper will find it.
+/// Verification is mandatory: an update overwrites the running executable, so a
+/// release without published checksums is refused rather than trusted.
+fn download_release_asset(
+    release: &ReleaseDescriptor,
+    partial_path: &Path,
+    final_path: &Path,
+) -> Result<(), String> {
+    let checksum_url = release.checksum_url.as_deref().ok_or_else(|| {
+        format!(
+            "This release publishes no {CHECKSUM_ASSET_NAME}, so the download cannot be verified."
+        )
+    })?;
+
+    let listing = fetch_bytes(checksum_url, 64 * 1024)?;
+    let listing = String::from_utf8(listing)
+        .map_err(|_| format!("{CHECKSUM_ASSET_NAME} is not text"))?;
+    let expected = expected_digest(&listing, &release.asset_name).ok_or_else(|| {
+        format!(
+            "{CHECKSUM_ASSET_NAME} lists no digest for {}",
+            release.asset_name
+        )
+    })?;
+
+    let payload = fetch_bytes(&release.asset_url, 128 * 1024 * 1024)?;
+    let actual = sha256_hex(&payload)?;
+    if actual != expected {
+        return Err(format!(
+            "The downloaded update does not match its published checksum (expected {expected}, got {actual}); it has not been installed."
+        ));
+    }
+
     let mut file = File::create(partial_path)
         .map_err(|e| format!("Unable to create temporary download file: {e}"))?;
-
-    io::copy(&mut reader, &mut file)
+    file.write_all(&payload)
         .map_err(|e| format!("Unable to write the downloaded update: {e}"))?;
     file.flush()
         .map_err(|e| format!("Unable to finalize the downloaded update: {e}"))?;
+    drop(file);
 
     std::fs::rename(partial_path, final_path)
         .map_err(|e| format!("Unable to finalize the downloaded update file: {e}"))?;
@@ -251,7 +364,7 @@ fn replace_target_binary(target: &Path, source: &Path) -> Result<(), String> {
 
         let renamed_existing = match std::fs::rename(target, &backup_path) {
             Ok(()) => true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => {
                 last_error = Some(error);
                 std::thread::sleep(Duration::from_millis(500));
@@ -526,6 +639,53 @@ mod tests {
         assert!(
             WINGET_PACKAGE_ID.starts_with(&format!("{owner}.")),
             "winget id {WINGET_PACKAGE_ID} does not belong to {owner}"
+        );
+    }
+
+    #[test]
+    fn a_download_url_outside_this_repository_is_refused() {
+        assert!(is_own_release_asset(
+            "https://github.com/hadufer/Claude-Code-Usage-Monitor/releases/download/v1.5.4/claude-code-usage-monitor.exe",
+            "hadufer",
+            "Claude-Code-Usage-Monitor"
+        ));
+        // What a tampered or redirected API response would look like.
+        assert!(!is_own_release_asset(
+            "https://example.com/hadufer/Claude-Code-Usage-Monitor/releases/download/v1/x.exe",
+            "hadufer",
+            "Claude-Code-Usage-Monitor"
+        ));
+        assert!(!is_own_release_asset(
+            "https://github.com/someone-else/Claude-Code-Usage-Monitor/releases/download/v1/x.exe",
+            "hadufer",
+            "Claude-Code-Usage-Monitor"
+        ));
+        assert!(!is_own_release_asset(
+            "http://github.com/hadufer/Claude-Code-Usage-Monitor/releases/download/v1/x.exe",
+            "hadufer",
+            "Claude-Code-Usage-Monitor"
+        ));
+    }
+
+    #[test]
+    fn the_digest_is_taken_from_the_matching_line_only() {
+        let listing = "1111111111111111111111111111111111111111111111111111111111111111  other-file.zip
+513c211ac265b5a6770724093d6895dd8012dc68f4f9619af93d2d8ecddcad33 *claude-code-usage-monitor.exe
+";
+        assert_eq!(
+            expected_digest(listing, "claude-code-usage-monitor.exe").as_deref(),
+            Some("513c211ac265b5a6770724093d6895dd8012dc68f4f9619af93d2d8ecddcad33")
+        );
+        assert!(expected_digest(listing, "not-listed.exe").is_none());
+        assert!(expected_digest("deadbeef  claude-code-usage-monitor.exe", "claude-code-usage-monitor.exe").is_none());
+    }
+
+    #[test]
+    fn the_platform_digest_matches_a_known_value() {
+        // SHA-256 of "abc", the canonical test vector.
+        assert_eq!(
+            sha256_hex(b"abc").unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 

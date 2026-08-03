@@ -49,4 +49,5 @@ pub(super) const STRINGS: Strings = Strings {
     second_suffix: "s",
     pace_colors: "Color según el ritmo",
     scoped_weekly_row: "Fila semanal por modelo",
+    auto_install_updates: "Instalar actualizaciones automáticamente",
 };

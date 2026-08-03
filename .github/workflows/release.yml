@@ -56,6 +56,22 @@ jobs:
             "/Oinstaller/out" "installer/claude-code-usage-monitor.iss"
           if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
 
+      # The app refuses to install an update it cannot verify against this file,
+      # so publishing it is what makes unattended updates possible at all.
+      - name: Publish checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            "target/release/claude-code-usage-monitor.exe",
+            "installer/out/claude-code-usage-monitor-setup.exe"
+          )
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            "$hash  $(Split-Path $f -Leaf)"
+          }
+          $lines | Set-Content -Path SHA256SUMS.txt -Encoding ascii
+          Get-Content SHA256SUMS.txt
+
       - name: Create GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
@@ -63,6 +79,7 @@ jobs:
           files: |
             target/release/claude-code-usage-monitor.exe
             installer/out/claude-code-usage-monitor-setup.exe
+            SHA256SUMS.txt
           generate_release_notes: true
 
       # Only the installer, and no release-notes rewrite: the exe already on that

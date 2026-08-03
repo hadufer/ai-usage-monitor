@@ -216,6 +216,8 @@ are file-only, because a Windows context menu is a poor place to type a hex code
 | `pace_color_on_track` | `#3F9142` | |
 | `pace_color_at_risk` | `#E8A33C` | |
 | `pace_color_over` | `#C4402F` | |
+| `auto_install_updates` | `true` | Install an available update without asking. Also in the **Settings** menu |
+| `update_check_interval_hours` | `24` | How often to look, clamped to 1 hour at the fastest |
 | `pin_to_primary_taskbar` | `true` on a fresh install | Keep the widget on the monitor Windows reports as primary. Dragging the widget onto another taskbar turns it off; dragging it back turns it on. An upgrade from a version without this key keeps whatever screen you had already chosen. |
 
 Values are validated when read. An unparsable colour or a threshold pair that
@@ -253,6 +255,37 @@ Settings are saved to:
 ```text
 %APPDATA%\ClaudeCodeUsageMonitor\settings.json
 ```
+
+## Updates
+
+The app checks this repository's releases on an interval, 24 hours by default, and
+installs anything newer on its own. Turn that off from the right-click **Settings**
+menu if you would rather be asked, and change the interval with
+`update_check_interval_hours` in the settings file.
+
+An update replaces the running executable, so it is not taken on trust:
+
+- The download URL has to sit under this repository's own release storage. A
+  response pointing anywhere else is refused rather than followed.
+- Every release publishes `SHA256SUMS.txt`, and the downloaded file is hashed and
+  compared against it before anything is written. A mismatch, or a release with no
+  checksum file, aborts the update.
+- Only a strictly higher version installs, so an update cannot walk you backwards.
+
+Be clear about what that buys you: it protects the integrity of the transfer, not
+the authenticity of the author. The binary and its checksum come from the same
+place, so if this repository were taken over, both would be replaced together.
+Only code signing with a key that never touches CI would defend against that, and
+this project has none. If that matters to you, turn auto-install off and build
+from source.
+
+A WinGet install is left alone: it is updated through WinGet, which opens a
+console window and has no business doing so unattended.
+
+One wrinkle worth knowing if you used the installer: a self-update replaces the
+executable, but not the version recorded in Add/Remove Programs, which will keep
+showing the version you installed. The app's own **Updates** menu shows what it is
+actually running.
 
 ## Build From Source
 
