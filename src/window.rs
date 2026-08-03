@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
-use crate::models::AppUsageData;
+use crate::models::{AppUsageData, UsageSection};
 use crate::pace;
 use crate::native_interop::{
     self, Color, TIMER_COUNTDOWN, TIMER_POLL, TIMER_RESET_POLL, TIMER_UPDATE_CHECK, WM_APP_TRAY,
@@ -49,6 +49,10 @@ struct AppState {
     hwnd: SendHwnd,
     taskbar_hwnd: Option<HWND>,
     tray_notify_hwnd: Option<HWND>,
+    tooltip_hwnd: Option<HWND>,
+    /// Backing buffer for the tooltip text. The control keeps the pointer, so
+    /// this has to outlive every call that hands it over.
+    tooltip_text: Vec<u16>,
     win_event_hook: Option<HWINEVENTHOOK>,
     is_dark: bool,
     embedded: bool,
@@ -159,8 +163,11 @@ const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
 const TASKBAR_MISSES_BEFORE_REATTACH: u32 = 6;
 /// Consecutive checks on the wrong screen before moving back. Locking the
 /// session, or attaching over RDP, reshuffles which monitor is primary for a
-/// few seconds, and reacting inside that window would land us anywhere.
-const WRONG_SCREEN_CHECKS_BEFORE_MOVE: u32 = 3;
+/// few seconds, and reacting inside that window would land us anywhere. The
+/// churn was measured at about six seconds, so this sits clear of it - the same
+/// margin `TASKBAR_MISSES_BEFORE_REATTACH` gets, which at three checks this
+/// constant did not have.
+const WRONG_SCREEN_CHECKS_BEFORE_MOVE: u32 = 6;
 
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -247,12 +254,15 @@ fn relaunch_self() {
     }
 }
 
-/// Detect explorer.exe restarts and recover from them.
+/// Keep the widget attached to the right taskbar, on its own thread so it
+/// survives a dead UI message loop.
 ///
-/// Once explorer destroys the taskbar, our embedded child window is destroyed
-/// and the UI message loop is dead, so recovery cannot happen in-process. This
-/// dedicated thread (independent of the dead message loop) polls the taskbar
-/// handle and, when it changes, relaunches the widget as a fresh process.
+/// Two very different failures are handled here. If explorer destroys our
+/// embedded child window, the message loop has nothing left to recreate and only
+/// a fresh process can recover - but only once a taskbar exists again to attach
+/// to. If the window is alive and merely its taskbar was rebuilt, or the pinned
+/// screen changed underneath it, re-attaching in place is enough and avoids the
+/// visible restart.
 fn spawn_taskbar_watchdog() {
     std::thread::spawn(move || {
         let mut consecutive_misses = 0_u32;
@@ -279,15 +289,24 @@ fn spawn_taskbar_watchdog() {
                     None => continue,
                 }
             };
-            if unsafe { !IsWindow(our_hwnd).as_bool() } {
-                diagnose::log("watchdog: our window is gone -> relaunching");
-                relaunch_self();
+            let taskbars = native_interop::find_taskbars();
+            let our_window_gone = unsafe { !IsWindow(our_hwnd).as_bool() };
+
+            if taskbars.is_empty() {
+                // No taskbar anywhere: the shell is down, or the session is
+                // ending. Relaunching now would attach to nothing and leave the
+                // widget stranded as a popup at the origin, with this watchdog
+                // inert because taskbar_hwnd would stay None. Wait it out.
+                if our_window_gone {
+                    diagnose::log("watchdog: window gone but no taskbar yet, waiting for the shell");
+                }
+                consecutive_misses = 0;
                 continue;
             }
 
-            let taskbars = native_interop::find_taskbars();
-            if taskbars.is_empty() {
-                consecutive_misses = 0;
+            if our_window_gone {
+                diagnose::log("watchdog: our window is gone and the shell is back -> relaunching");
+                relaunch_self();
                 continue;
             }
 
@@ -305,6 +324,18 @@ fn spawn_taskbar_watchdog() {
                         None => continue,
                     }
                 };
+                let dragging = {
+                    let state = lock_state();
+                    state.as_ref().map(|s| s.dragging).unwrap_or(false)
+                };
+                if dragging {
+                    // Re-parenting under a held mouse button would yank the
+                    // widget away mid-drag; `position_at_taskbar` refuses to move
+                    // during a drag for the same reason.
+                    wrong_screen_checks = 0;
+                    continue;
+                }
+
                 if should_move_back_to_primary(current, &taskbars, pinned) {
                     wrong_screen_checks += 1;
                     if wrong_screen_checks >= WRONG_SCREEN_CHECKS_BEFORE_MOVE {
@@ -397,8 +428,10 @@ struct SettingsFile {
     taskbar_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     taskbar_device: Option<String>,
-    #[serde(default = "default_true")]
-    pin_to_primary_taskbar: bool,
+    /// `None` means the file predates the setting, which is what lets an
+    /// existing screen choice survive the upgrade instead of being pinned over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pin_to_primary_taskbar: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scoped_label_last: Option<String>,
     #[serde(default = "default_poll_interval")]
@@ -417,6 +450,10 @@ struct SettingsFile {
     show_antigravity: bool,
     #[serde(default = "default_true")]
     show_scoped_weekly: bool,
+    /// Set when the file on disk failed to parse. Never serialized: it only
+    /// stops this run from writing defaults over content we could not read.
+    #[serde(skip)]
+    unreadable: bool,
     #[serde(default = "default_true")]
     pace_colors: bool,
     #[serde(default = "default_pace_on_track")]
@@ -439,7 +476,7 @@ impl Default for SettingsFile {
             tray_offset: 0,
             taskbar_index: 0,
             taskbar_device: None,
-            pin_to_primary_taskbar: true,
+            pin_to_primary_taskbar: Some(true),
             scoped_label_last: None,
             poll_interval_ms: default_poll_interval(),
             language: None,
@@ -449,6 +486,7 @@ impl Default for SettingsFile {
             show_codex: false,
             show_antigravity: false,
             show_scoped_weekly: true,
+            unreadable: false,
             pace_colors: true,
             pace_on_track: default_pace_on_track(),
             pace_at_risk: default_pace_at_risk(),
@@ -513,14 +551,37 @@ fn load_settings() -> SettingsFile {
         Ok(c) => c,
         Err(_) => return SettingsFile::default(),
     };
-    let mut settings: SettingsFile = serde_json::from_str(&content).unwrap_or_default();
+    let mut settings: SettingsFile = match serde_json::from_str(&content) {
+        Ok(settings) => settings,
+        Err(error) => {
+            // Everything below would otherwise be silently replaced by defaults
+            // and written back over the file, losing hand-tuned values. Say so,
+            // and refuse to overwrite what we could not read.
+            diagnose::log_error("settings file could not be parsed; using defaults", error);
+            let mut defaults = SettingsFile::default();
+            defaults.unreadable = true;
+            return defaults;
+        }
+    };
     if !settings.show_claude_code && !settings.show_codex && !settings.show_antigravity {
         settings.show_claude_code = true;
+    }
+    if settings.pin_to_primary_taskbar.is_none() {
+        // A file written before this setting existed may already carry a screen
+        // the user picked; pinning would override and then overwrite it.
+        let screen_already_chosen =
+            settings.taskbar_device.is_some() || settings.taskbar_index != 0;
+        settings.pin_to_primary_taskbar = Some(!screen_already_chosen);
     }
     settings
 }
 
 fn save_settings(settings: &SettingsFile) {
+    if settings.unreadable {
+        diagnose::log("refusing to overwrite a settings file that could not be parsed");
+        return;
+    }
+
     let path = settings_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -545,13 +606,18 @@ fn pace_settings_from(settings: &SettingsFile) -> pace::Settings {
 /// Written back over the file as it is on disk, so the values that are only
 /// tunable by hand keep whatever the user put there.
 fn save_state_settings() {
-    let state = lock_state();
-    if let Some(s) = state.as_ref() {
-        let mut settings = load_settings();
+    // Read the file before taking the lock and write it after releasing it: the
+    // UI thread blocks on this mutex, and %APPDATA% can be slow (sync, scanners).
+    let mut settings = load_settings();
+    {
+        let state = lock_state();
+        let Some(s) = state.as_ref() else {
+            return;
+        };
         settings.tray_offset = s.tray_offset;
         settings.taskbar_index = s.taskbar_index;
         settings.taskbar_device = s.taskbar_device.clone();
-        settings.pin_to_primary_taskbar = s.pin_to_primary_taskbar;
+        settings.pin_to_primary_taskbar = Some(s.pin_to_primary_taskbar);
         settings.scoped_label_last = if s.scoped_label.is_empty() {
             None
         } else {
@@ -568,8 +634,8 @@ fn save_state_settings() {
         settings.show_antigravity = s.show_antigravity;
         settings.show_scoped_weekly = s.show_scoped_weekly;
         settings.pace_colors = s.pace.enabled;
-        save_settings(&settings);
     }
+    save_settings(&settings);
 }
 
 /// `None` leaves the badge on its built-in percentage colouring.
@@ -974,6 +1040,108 @@ fn refresh_usage_texts(state: &mut AppState) {
     } else if state.show_antigravity {
         state.antigravity_session_text = "!".to_string();
         state.antigravity_weekly_text = "!".to_string();
+    }
+}
+
+/// One tooltip line: what the bar shows, plus the wall-clock reset time the bar
+/// can only express as a countdown.
+fn tooltip_row(prefix: &str, label: &str, section: &UsageSection) -> String {
+    let percentage = format!("{:.0}%", section.percentage);
+    match section.resets_at.and_then(native_interop::format_local_time) {
+        Some(exact) => format!("{prefix}{label}  {percentage}  \u{2192} {exact}"),
+        None => format!("{prefix}{label}  {percentage}"),
+    }
+}
+
+fn build_tooltip_text(state: &AppState) -> String {
+    let strings = state.language.strings();
+    let data = state.data.as_ref();
+    let name_providers = active_model_count(
+        state.show_claude_code,
+        state.show_codex,
+        state.show_antigravity,
+    ) > 1;
+    let mut lines: Vec<String> = Vec::new();
+
+    let mut push_provider = |shown: bool, usage: Option<&crate::models::UsageData>, name: &str| {
+        if !shown {
+            return;
+        }
+        let Some(usage) = usage else {
+            return;
+        };
+        let prefix = if name_providers {
+            format!("{name} ")
+        } else {
+            String::new()
+        };
+        lines.push(tooltip_row(&prefix, strings.session_window, &usage.session));
+        lines.push(tooltip_row(&prefix, strings.weekly_window, &usage.weekly));
+        if let Some(scoped) = usage.scoped.as_ref() {
+            lines.push(tooltip_row(&prefix, &scoped.label, &scoped.section));
+        }
+    };
+
+    push_provider(
+        state.show_claude_code,
+        data.and_then(|data| data.claude_code.as_ref()),
+        strings.claude_code_model,
+    );
+    push_provider(
+        state.show_codex,
+        data.and_then(|data| data.codex.as_ref()),
+        strings.codex_model,
+    );
+    push_provider(
+        state.show_antigravity,
+        data.and_then(|data| data.antigravity.as_ref()),
+        strings.antigravity_model,
+    );
+
+    if lines.is_empty() {
+        strings.window_title.to_string()
+    } else {
+        lines.join("\r\n")
+    }
+}
+
+/// Rebuild the hover text. No Win32 call happens while the state lock is held.
+fn refresh_tooltip() {
+    let (parent, tooltip, text) = {
+        let state = lock_state();
+        let Some(s) = state.as_ref() else {
+            return;
+        };
+        (s.hwnd.to_hwnd(), s.tooltip_hwnd, build_tooltip_text(s))
+    };
+
+    let mut buffer = native_interop::wide_str(&text);
+    let tooltip = match tooltip {
+        Some(tooltip) => {
+            native_interop::set_tooltip_text(tooltip, parent, &mut buffer);
+            Some(tooltip)
+        }
+        None => match native_interop::create_tooltip(parent, &mut buffer) {
+            Some(native_interop::TooltipOutcome::Created(tooltip)) => {
+                diagnose::log("tooltip created");
+                Some(tooltip)
+            }
+            Some(native_interop::TooltipOutcome::CreateFailed(code)) => {
+                diagnose::log(format!("tooltip window could not be created (0x{code:08X})"));
+                None
+            }
+            outcome => {
+                diagnose::log(format!("tooltip not created: {outcome:?}"));
+                None
+            }
+        },
+    };
+
+    // Keep the buffer alive: the control holds the pointer, not a copy.
+    let mut state = lock_state();
+    if let Some(s) = state.as_mut() {
+        s.tooltip_hwnd = tooltip;
+        s.tooltip_text = buffer;
     }
 }
 
@@ -1633,6 +1801,8 @@ pub fn run() {
                 hwnd: SendHwnd::from_hwnd(hwnd),
                 taskbar_hwnd: None,
                 tray_notify_hwnd: None,
+                tooltip_hwnd: None,
+                tooltip_text: Vec::new(),
                 win_event_hook: None,
                 is_dark,
                 embedded: false,
@@ -1671,7 +1841,7 @@ pub fn run() {
                 last_update_check_unix: settings.last_update_check_unix,
                 taskbar_index: settings.taskbar_index,
                 taskbar_device: settings.taskbar_device.clone(),
-                pin_to_primary_taskbar: settings.pin_to_primary_taskbar,
+                pin_to_primary_taskbar: settings.pin_to_primary_taskbar.unwrap_or(true),
                 tray_offset: settings.tray_offset,
                 dragging: false,
                 drag_start_mouse_x: 0,
@@ -1686,7 +1856,7 @@ pub fn run() {
             hwnd,
             settings.taskbar_index,
             settings.taskbar_device.as_deref(),
-            settings.pin_to_primary_taskbar,
+            settings.pin_to_primary_taskbar.unwrap_or(true),
         ) {
             embedded = true;
             // Record the monitor now, rather than waiting for whatever menu
@@ -1710,6 +1880,7 @@ pub fn run() {
 
         // Register system tray icon(s)
         sync_tray_icons(hwnd);
+        refresh_tooltip();
 
         // Position and show (only if widget_visible preference is true)
         position_at_taskbar();
@@ -2316,6 +2487,7 @@ fn do_poll(send_hwnd: SendHwnd) {
                             s.auth_watch_mode = poller::CredentialWatchMode::ActiveSource;
                             s.auth_watch_snapshot.clear();
                             s.session_text = "...".to_string();
+            s.scoped_text = "...".to_string();
                             s.weekly_text = "...".to_string();
                             s.codex_session_text = "...".to_string();
                             s.codex_weekly_text = "...".to_string();
@@ -2459,6 +2631,7 @@ fn check_theme_change() {
 fn check_language_change() {
     if update_language_change() {
         render_layered();
+        refresh_tooltip();
     }
 }
 
@@ -2751,7 +2924,12 @@ unsafe extern "system" fn wnd_proc(
         WM_APP_USAGE_UPDATED => {
             check_theme_change();
             check_language_change();
+            // The per-model row widens the label column, so poll data can change
+            // the widget's width. It is right-anchored, so a resize without a
+            // reposition slides it under the notification area.
+            position_at_taskbar();
             render_layered();
+            refresh_tooltip();
             schedule_countdown_timer();
             suppress_tray_reposition_for(Duration::from_millis(
                 TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS,
@@ -2779,6 +2957,11 @@ unsafe extern "system" fn wnd_proc(
                 save_state_settings();
                 position_at_taskbar();
                 render_layered();
+                // A taskbar rebuild discards the shell's tray registrations, which
+                // is why the watchdog exists at all; the relaunch path used to
+                // restore them on startup and this path has to do it itself.
+                sync_tray_icons(hwnd);
+                refresh_tooltip();
             }
             LRESULT(0)
         }
@@ -2949,10 +3132,10 @@ unsafe extern "system" fn wnd_proc(
                         // Dragging onto another taskbar is an explicit choice, so
                         // the remembered monitor is deliberately not consulted:
                         // the index decides, and the new monitor is recorded.
-                        let dropped_on_primary = native_interop::find_taskbars()
-                            .get(target_index)
-                            .map(|taskbar| taskbar.is_primary)
-                            .unwrap_or(false);
+                        // Taken from the taskbar the drop actually landed on. Re-enumerating
+                        // here and indexing by position could read a different screen,
+                        // or none, if the shell dropped a taskbar in between.
+                        let dropped_on_primary = target_taskbar.is_primary;
                         {
                             let mut state = lock_state();
                             if let Some(s) = state.as_mut() {
@@ -2981,6 +3164,7 @@ unsafe extern "system" fn wnd_proc(
                         let mut state = lock_state();
                         if let Some(s) = state.as_mut() {
                             s.session_text = "...".to_string();
+            s.scoped_text = "...".to_string();
                             s.weekly_text = "...".to_string();
                             s.codex_session_text = "...".to_string();
                             s.codex_weekly_text = "...".to_string();
@@ -3107,6 +3291,7 @@ unsafe extern "system" fn wnd_proc(
                                 _ => {}
                             }
                             s.session_text = "...".to_string();
+            s.scoped_text = "...".to_string();
                             s.weekly_text = "...".to_string();
                             s.codex_session_text = "...".to_string();
                             s.codex_weekly_text = "...".to_string();
@@ -3682,11 +3867,13 @@ fn draw_row(
             right: x + sc(label_width),
             bottom: y + seg_h,
         };
+        // The label is a model name from the API, so it can outgrow the column;
+        // ellipsis instead of a glyph sliced in half.
         let _ = DrawTextW(
             hdc,
             &mut label_wide,
             &mut label_rect,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
         );
 
         let mut model_x = x + sc(label_width) + sc(LABEL_RIGHT_MARGIN);

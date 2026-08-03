@@ -755,10 +755,23 @@ fn try_usage_endpoint(token: &str) -> Result<Option<UsageData>, PollError> {
 /// The per-model weekly limit, which the API only reports inside `limits`
 /// rather than as its own top-level bucket.
 fn scoped_weekly(limits: &[UsageLimit]) -> Option<ScopedUsage> {
-    let limit = limits
+    // Every scoped entry is considered, not just the first: a scope can carry a
+    // surface instead of a model, or a null percent, and letting such an entry
+    // short-circuit would hide a perfectly good model limit sitting behind it.
+    // When several models are reported, the most consumed one is the useful one.
+    limits
         .iter()
-        .find(|limit| limit.kind.as_deref() == Some("weekly_scoped"))?;
+        .filter(|limit| limit.kind.as_deref() == Some("weekly_scoped"))
+        .filter_map(usable_scoped_limit)
+        .max_by(|left, right| {
+            left.section
+                .percentage
+                .partial_cmp(&right.section.percentage)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
 
+fn usable_scoped_limit(limit: &UsageLimit) -> Option<ScopedUsage> {
     let label = limit
         .scope
         .as_ref()?
@@ -1695,6 +1708,43 @@ mod tests {
         assert_eq!(scoped.label, "Fable");
         assert_eq!(scoped.section.percentage, 29.0);
         assert!(scoped.section.resets_at.is_some());
+    }
+
+    /// Flagged in review: a surface-scoped entry, or one with a null percent,
+    /// used to short-circuit and hide the model limit behind it.
+    #[test]
+    fn an_incomplete_scoped_entry_does_not_hide_a_usable_one() {
+        let body = r#"{
+            "limits": [
+                {"kind": "weekly_scoped", "percent": 12, "resets_at": null,
+                 "scope": {"model": null, "surface": "code"}},
+                {"kind": "weekly_scoped", "percent": null, "resets_at": null,
+                 "scope": {"model": {"display_name": "Sonnet"}}},
+                {"kind": "weekly_scoped", "percent": 70, "resets_at": null,
+                 "scope": {"model": {"display_name": "Opus"}}}
+            ]
+        }"#;
+
+        let response: UsageResponse = serde_json::from_str(body).expect("payload should parse");
+        let scoped = scoped_weekly(&response.limits).expect("the usable entry should be found");
+        assert_eq!(scoped.label, "Opus");
+        assert_eq!(scoped.section.percentage, 70.0);
+    }
+
+    #[test]
+    fn the_most_consumed_model_wins_when_several_are_reported() {
+        let body = r#"{
+            "limits": [
+                {"kind": "weekly_scoped", "percent": 20, "resets_at": null,
+                 "scope": {"model": {"display_name": "Sonnet"}}},
+                {"kind": "weekly_scoped", "percent": 85, "resets_at": null,
+                 "scope": {"model": {"display_name": "Fable"}}}
+            ]
+        }"#;
+
+        let response: UsageResponse = serde_json::from_str(body).expect("payload should parse");
+        let scoped = scoped_weekly(&response.limits).expect("a limit should be found");
+        assert_eq!(scoped.label, "Fable");
     }
 
     #[test]

@@ -4,10 +4,11 @@
 # Claude Code Usage Monitor
 
 > This is a fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor).
-> It adds three things: the bars are coloured by how fast you are burning the
-> window rather than by the raw percentage, a third bar tracks the per-model
-> weekly limit, and both are configurable from the settings file. Everything
-> else is upstream's work.
+> The bars are coloured by how fast you are burning the window rather than by the
+> raw percentage, a third bar tracks the per-model weekly limit, hovering shows
+> each limit's exact reset time, and the widget stays put on multi-monitor
+> machines across session locks. All of it is configurable from the settings
+> file. Everything else is upstream's work.
 
 ![Screenshot](.github/animation.gif)
 
@@ -20,6 +21,8 @@ It sits in your taskbar and shows how much of your Claude Code, Codex, and/or An
 - A **5h** bar for your current 5-hour Claude usage window
 - A **7d** bar for your current 7-day window
 - A third bar for the **per-model weekly limit**, labelled with whatever model the API reports it against
+- Hovering the widget shows each limit's **exact reset time**, in your Windows regional format, where the bars only have room for a countdown
+- The widget stays on one screen: it no longer wanders to another monitor when the session is locked or reattached over RDP
 - Bars coloured by **consumption pace** instead of raw percentage, so 40% used with four hours left reads differently from 40% used with twenty minutes left
 - Optional Codex usage bars alongside Claude Code
 - Optional Antigravity model usage bars for Google's 5-hour and weekly Gemini quota windows
@@ -127,7 +130,10 @@ equally light traffic-light colours collapse into each other under the common
 forms of colour blindness, and the bars are only thirteen pixels tall.
 
 Turn the whole thing off from the right-click **Settings** menu to get upstream's
-percentage colouring back.
+flat brand-coloured bars back. Note that pace answers "am I burning too fast for
+the time left", not "am I nearly out": near the end of a window pace converges on
+the raw percentage, so a bar that is 95% spent an hour before its reset reads
+amber rather than red.
 
 ## Per-Model Weekly Bar
 
@@ -143,8 +149,11 @@ it is shown and the label column widens to hold a model name. Toggle it from the
 right-click **Settings** menu.
 
 One limitation: this data only exists in the usage endpoint's response. When the
-app falls back to reading rate-limit headers from the Messages API, the third bar
-disappears until the usage endpoint answers again.
+app falls back to reading rate-limit headers from the Messages API, the row stays
+but its value shows `--`, because dropping the row would reflow the whole widget
+over a single incomplete poll. It keeps the last label it saw, so the row does not
+disappear on its own once a scoped limit has been reported at least once — untick
+it in the **Settings** menu if the limit stops applying to you.
 
 ## Settings File
 
@@ -161,6 +170,7 @@ are file-only, because a Windows context menu is a poor place to type a hex code
 | `pace_color_on_track` | `#3F9142` | |
 | `pace_color_at_risk` | `#E8A33C` | |
 | `pace_color_over` | `#C4402F` | |
+| `pin_to_primary_taskbar` | `true` on a fresh install | Keep the widget on the monitor Windows reports as primary. Dragging the widget onto another taskbar turns it off; dragging it back turns it on. An upgrade from a version without this key keeps whatever screen you had already chosen. |
 
 Values are validated when read. An unparsable colour or a threshold pair that
 would leave a band unreachable falls back to its default rather than taking the
