@@ -168,6 +168,12 @@ const TASKBAR_MISSES_BEFORE_REATTACH: u32 = 6;
 /// margin `TASKBAR_MISSES_BEFORE_REATTACH` gets, which at three checks this
 /// constant did not have.
 const WRONG_SCREEN_CHECKS_BEFORE_MOVE: u32 = 6;
+/// How long startup waits for the pinned screen's taskbar to show up before
+/// settling for whatever exists. A relaunch triggered during a session lock lands
+/// squarely inside the rebuild, and attaching immediately is what put the widget
+/// on the wrong screen in plain sight until the watchdog corrected it.
+const PRIMARY_WAIT_CHECKS: u32 = 16;
+const PRIMARY_WAIT_INTERVAL_MS: u64 = 500;
 
 static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -776,6 +782,36 @@ fn toggle_widget_visibility(hwnd: HWND) {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
     }
+}
+
+/// Whether startup should hold off: we want the primary monitor's taskbar and the
+/// shell has not produced it yet.
+fn should_wait_for_primary(taskbars: &[native_interop::TaskbarWindow], pinned: bool) -> bool {
+    pinned && !taskbars.iter().any(|taskbar| taskbar.is_primary)
+}
+
+/// Give the shell a bounded chance to finish rebuilding before we choose a screen.
+fn wait_for_primary_taskbar(pinned: bool) {
+    if !pinned {
+        return;
+    }
+
+    for attempt in 0..PRIMARY_WAIT_CHECKS {
+        if !should_wait_for_primary(&native_interop::find_taskbars(), pinned) {
+            if attempt > 0 {
+                diagnose::log(format!(
+                    "primary taskbar appeared after {} ms",
+                    attempt as u64 * PRIMARY_WAIT_INTERVAL_MS
+                ));
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(PRIMARY_WAIT_INTERVAL_MS));
+    }
+
+    diagnose::log(
+        "no primary taskbar appeared in time; attaching to whatever the shell offers",
+    );
 }
 
 /// Whether a pinned widget has ended up on the wrong screen and a correct one
@@ -1852,6 +1888,7 @@ pub fn run() {
         }
 
         // Try to embed in taskbar
+        wait_for_primary_taskbar(settings.pin_to_primary_taskbar.unwrap_or(true));
         if attach_to_taskbar(
             hwnd,
             settings.taskbar_index,
@@ -4134,6 +4171,29 @@ mod tests {
         assert!(
             !should_move_back_to_primary(&secondary, &taskbars, false),
             "a deliberate drag to another screen must be respected"
+        );
+    }
+
+    /// Observed live: a relaunch inside a session lock found only the secondary
+    /// taskbar and attached there in plain sight.
+    #[test]
+    fn startup_waits_while_the_primary_taskbar_is_missing() {
+        let only_secondary = vec![screen("SECOND", 1920, false)];
+        assert!(should_wait_for_primary(&only_secondary, true));
+    }
+
+    #[test]
+    fn startup_does_not_wait_once_the_primary_is_there() {
+        let both = vec![screen("MAIN", 0, true), screen("SECOND", 1920, false)];
+        assert!(!should_wait_for_primary(&both, true));
+    }
+
+    #[test]
+    fn startup_never_waits_for_an_unpinned_widget() {
+        let only_secondary = vec![screen("SECOND", 1920, false)];
+        assert!(
+            !should_wait_for_primary(&only_secondary, false),
+            "a widget the user put on another screen has nothing to wait for"
         );
     }
 
