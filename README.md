@@ -80,13 +80,20 @@ installing the other.
 
 ## Use
 
-If you installed with WinGet, run:
+The installer puts a **Claude Code Usage Monitor** entry in your Start Menu, so
+that is the shortest way in. If you let it add the app to your `PATH`, or if you
+installed with WinGet, this works from any new terminal:
 
 ```powershell
 claude-code-usage-monitor
 ```
 
-If you downloaded the release directly, run the executable itself — the `claude-code-usage-monitor` command only exists once WinGet has created its shim.
+With the portable exe, run the file itself: the bare command only exists once
+something has put the directory on your `PATH`. Nothing prints to the terminal
+either way — it is a GUI app, it returns immediately and appears in the taskbar.
+
+Only one copy runs at a time. Launching it again while it is already running does
+nothing at all, by design, and reports no error.
 
 Once running, it will appear in your taskbar and as one or more tray icons in the notification area.
 
@@ -115,6 +122,35 @@ If multiple providers are enabled, the app shows one tray icon per provider. If 
 The Claude Code tray icon uses the same pace colours as the Claude bars, with the badge number switching to a dark ink on the light amber band so it stays readable. The Codex tray icon uses a black and white badge style. The Antigravity tray icon uses a blue badge style.
 
 Hovering over a tray icon shows the usage values for that model.
+
+### Exact Reset Times
+
+The bars only have room for a countdown, so hovering the taskbar widget shows the
+wall-clock time each limit resets at, one line per bar. Times follow your Windows
+regional format, and the date is only shown when the reset is not today. The
+conversion goes through your time zone rather than shifting by a fixed offset, so
+a reset on the far side of a daylight-saving change still reads correctly.
+
+## Which Screen It Lives On
+
+By default the widget stays on the monitor Windows reports as primary. That
+sounds obvious, but the shell makes it harder than it looks: locking the session
+on a machine that can also be used over RDP tears the taskbars down and rebuilds
+them, and for a few seconds the primary flag can sit on another monitor or on
+none at all. The widget is therefore pinned to an identity Windows maintains
+itself rather than to a position in a list, it waits for that screen to exist
+before choosing at startup, and a background check moves it back if it ever ends
+up elsewhere.
+
+Drag the widget onto another taskbar and the pin turns off — a screen you picked
+on purpose is respected, and drift correction stops for it. Drag it back onto the
+primary and the pin comes back on. Upgrading from a version that predates the
+setting keeps whatever screen you had already chosen rather than yanking the
+widget to the primary.
+
+If your primary monitor has no taskbar at all, the widget goes wherever it can
+and says so in the diagnostic log. That one is the shell's problem, not the app's,
+and restarting Windows Explorer fixes it.
 
 ## Pace Colours
 
@@ -206,11 +242,54 @@ is how the per-model weekly limit was found in the first place. It holds usage
 percentages and reset times, never a token, and the file is rewritten on every
 run. Diagnostics are off unless you pass the flag.
 
+It also records the decisions that are otherwise invisible: which taskbar was
+chosen and whether it was matched by monitor or fallen back to by index, whether
+the background check moved the widget, how long startup waited for the primary
+screen, why a tooltip could not be created, and whether the settings file failed
+to parse. Those exist because each one of them once failed silently.
+
 Settings are saved to:
 
 ```text
 %APPDATA%\ClaudeCodeUsageMonitor\settings.json
 ```
+
+## Build From Source
+
+Requires a stable Rust toolchain and the MSVC target; nothing else.
+
+```powershell
+cargo build --release
+cargo test
+```
+
+The binary lands in `target\release\claude-code-usage-monitor.exe` and runs from
+wherever you put it.
+
+To reproduce the installer you also need the Inno Setup compiler
+(`winget install JRSoftware.InnoSetup`):
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" `
+  /DMyAppVersion=1.5.3 /Oinstaller\out installer\claude-code-usage-monitor.iss
+```
+
+CI does exactly this on a tag push, and publishes both files to the release. The
+workflow also takes a manual run with an existing tag, which attaches a rebuilt
+installer to that release without touching the executable already published
+there — its checksum is what the WinGet manifest pins.
+
+## Uninstall
+
+If you used the installer, uninstall from Windows Settings or Add/Remove Programs,
+or run `unins000.exe` in the install directory. That removes the executable, the
+Start Menu entries and the `PATH` entry.
+
+Two things are deliberately left behind, because they are yours: the settings file
+at `%APPDATA%\ClaudeCodeUsageMonitor\settings.json`, and the `Start with Windows`
+registry value if you enabled it from the tray menu. Untick that menu item before
+uninstalling if you want it gone, or delete
+`ClaudeCodeUsageMonitor` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Account Support
 
@@ -252,6 +331,8 @@ What the app stores locally:
 - Last update check time
 - Displayed model preferences
 - Pace colouring preferences: the two toggles, the thresholds, the elapsed floor and the three band colours
+- Which monitor the widget is pinned to, and whether pinning is on
+- The last per-model label the API reported, so the third row is laid out correctly on the next start before the first poll answers
 
 What it does **not** do:
 
