@@ -203,13 +203,14 @@ it in the **Settings** menu if the limit stops applying to you.
 
 ## Settings File
 
-Two toggles live in the right-click **Settings** menu. The thresholds and colours
+A few toggles live in the right-click **Settings** menu. The thresholds and colours
 are file-only, because a Windows context menu is a poor place to type a hex code.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `pace_colors` | `true` | Colour by pace instead of raw percentage |
 | `show_scoped_weekly` | `true` | Show the per-model weekly bar |
+| `detailed_time` | `false` | Show hours *and* minutes (`3h59m`) instead of the nearest hour (`4h`). Widens the widget. Also in the **Settings** menu |
 | `pace_on_track` | `85` | Below this pace, the bar is green |
 | `pace_at_risk` | `115` | Below this, amber; at or above, red |
 | `pace_min_elapsed_fraction` | `0.1` | Floor on elapsed time, as a fraction of the window |

@@ -49,5 +49,6 @@ pub(super) const STRINGS: Strings = Strings {
     antigravity_window_title: "Монитор использования Antigravity",
     pace_colors: "Цвет по темпу расхода",
     scoped_weekly_row: "Недельная строка по модели",
+    detailed_time: "Подробное время (часы и минуты)",
     auto_install_updates: "Устанавливать обновления автоматически",
 };

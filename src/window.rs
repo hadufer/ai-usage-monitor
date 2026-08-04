@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -146,6 +146,7 @@ const IDM_LANG_SIMPLIFIED_CHINESE: u16 = 51;
 const IDM_PACE_COLORS: u16 = 32;
 const IDM_SCOPED_WEEKLY_ROW: u16 = 33;
 const IDM_AUTO_INSTALL_UPDATES: u16 = 34;
+const IDM_DETAILED_TIME: u16 = 35;
 const IDM_MODEL_CLAUDE_CODE: u16 = 60;
 const IDM_MODEL_CODEX: u16 = 61;
 const IDM_MODEL_ANTIGRAVITY: u16 = 62;
@@ -182,6 +183,15 @@ static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None)
 
 /// Current system DPI (96 = 100% scaling, 144 = 150%, 192 = 200%, etc.)
 static CURRENT_DPI: AtomicU32 = AtomicU32::new(96);
+
+/// Show the countdown as "3h59m" instead of the rounded "4h". Ambient like the DPI
+/// above, and for the same reason: the text and the column it has to fit in are
+/// measured in three different places, none of which wants a flag threaded through it.
+static DETAILED_TIME: AtomicBool = AtomicBool::new(false);
+
+fn detailed_time() -> bool {
+    DETAILED_TIME.load(Ordering::Relaxed)
+}
 
 /// Scale a base pixel value (designed at 96 DPI) to the current DPI.
 fn sc(px: i32) -> i32 {
@@ -465,6 +475,9 @@ struct SettingsFile {
     unreadable: bool,
     #[serde(default = "default_true")]
     pace_colors: bool,
+    /// Off by default: the compact rounded countdown is the narrower widget.
+    #[serde(default)]
+    detailed_time: bool,
     #[serde(default = "default_true")]
     auto_install_updates: bool,
     #[serde(default = "default_update_check_interval_hours")]
@@ -501,6 +514,7 @@ impl Default for SettingsFile {
             show_scoped_weekly: true,
             unreadable: false,
             pace_colors: true,
+            detailed_time: false,
             auto_install_updates: true,
             update_check_interval_hours: default_update_check_interval_hours(),
             pace_on_track: default_pace_on_track(),
@@ -656,6 +670,7 @@ fn save_state_settings() {
         settings.auto_install_updates = s.auto_install_updates;
         settings.update_check_interval_hours = s.update_check_interval_hours;
     }
+    settings.detailed_time = detailed_time();
     save_settings(&settings);
 }
 
@@ -1052,16 +1067,17 @@ fn refresh_usage_texts(state: &mut AppState) {
     }
 
     let strings = state.language.strings();
+    let detailed = detailed_time();
     let Some(data) = state.data.as_ref() else {
         return;
     };
 
     if let Some(claude_code) = data.claude_code.as_ref() {
-        state.session_text = poller::format_line(&claude_code.session, strings);
-        state.weekly_text = poller::format_line(&claude_code.weekly, strings);
+        state.session_text = poller::format_line(&claude_code.session, strings, detailed);
+        state.weekly_text = poller::format_line(&claude_code.weekly, strings, detailed);
         match claude_code.scoped.as_ref() {
             Some(scoped) => {
-                state.scoped_text = poller::format_line(&scoped.section, strings);
+                state.scoped_text = poller::format_line(&scoped.section, strings, detailed);
                 state.scoped_label = scoped.label.clone();
             }
             None => {
@@ -1077,20 +1093,21 @@ fn refresh_usage_texts(state: &mut AppState) {
     }
 
     if let Some(codex) = data.codex.as_ref() {
-        state.codex_session_text = poller::format_line(&codex.session, strings);
-        state.codex_weekly_text = poller::format_line(&codex.weekly, strings);
+        state.codex_session_text = poller::format_line(&codex.session, strings, detailed);
+        state.codex_weekly_text = poller::format_line(&codex.weekly, strings, detailed);
     } else if state.show_codex {
         state.codex_session_text = "!".to_string();
         state.codex_weekly_text = "!".to_string();
     }
 
     if let Some(antigravity) = data.antigravity.as_ref() {
-        state.antigravity_session_text = poller::format_line(&antigravity.session, strings);
+        state.antigravity_session_text =
+            poller::format_line(&antigravity.session, strings, detailed);
         state.antigravity_weekly_text =
             if antigravity.weekly.resets_at.is_none() && antigravity.weekly.percentage == 0.0 {
                 "--".to_string()
             } else {
-                poller::format_line(&antigravity.weekly, strings)
+                poller::format_line(&antigravity.weekly, strings, detailed)
             };
     } else if state.show_antigravity {
         state.antigravity_session_text = "!".to_string();
@@ -1608,6 +1625,19 @@ const SCOPED_LABEL_WIDTH: i32 = 34;
 const LABEL_RIGHT_MARGIN: i32 = 10;
 const BAR_RIGHT_MARGIN: i32 = 4;
 const TEXT_WIDTH: i32 = 62;
+/// Measured in Segoe UI 12px, as TEXT_WIDTH itself was: the widest detailed line,
+/// "100% · 23h59m", draws 81px against the compact "100% · 59m" at 62px.
+/// ponytail: latin-sized, like TEXT_WIDTH. Japanese needs 104px because its hour
+/// suffix is two glyphs ("23時間59分") and will clip; widen this if that matters.
+const TEXT_WIDTH_DETAILED: i32 = 92;
+
+fn text_width() -> i32 {
+    if detailed_time() {
+        TEXT_WIDTH_DETAILED
+    } else {
+        TEXT_WIDTH
+    }
+}
 const MODEL_RIGHT_MARGIN: i32 = 3;
 const RIGHT_MARGIN: i32 = 1;
 const WIDGET_HEIGHT: i32 = 46;
@@ -1647,7 +1677,7 @@ fn total_widget_width_for(active_models: i32, scoped_visible: bool) -> i32 {
     let bar_segments = row_bar_segment_count(active_models);
     let model_width = (sc(SEGMENT_W) + sc(SEGMENT_GAP)) * bar_segments - sc(SEGMENT_GAP)
         + sc(BAR_RIGHT_MARGIN)
-        + sc(TEXT_WIDTH);
+        + sc(text_width());
 
     sc(LEFT_DIVIDER_W)
         + sc(DIVIDER_RIGHT_MARGIN)
@@ -1825,6 +1855,8 @@ pub fn run() {
         }
 
         let settings = load_settings();
+        // Before the first width is computed below, since it depends on this.
+        DETAILED_TIME.store(settings.detailed_time, Ordering::Relaxed);
         let language_override = settings.language.as_deref().and_then(LanguageId::from_code);
         let language = localization::resolve_language(language_override);
         let install_channel = updater::current_install_channel();
@@ -2660,25 +2692,26 @@ fn schedule_countdown_timer() {
         }
     }
 
+    let detailed = detailed_time();
     let delays = [
         data.claude_code
             .as_ref()
-            .and_then(|usage| poller::time_until_display_change(usage.session.resets_at)),
+            .and_then(|usage| poller::time_until_display_change(usage.session.resets_at, detailed)),
         data.claude_code
             .as_ref()
-            .and_then(|usage| poller::time_until_display_change(usage.weekly.resets_at)),
+            .and_then(|usage| poller::time_until_display_change(usage.weekly.resets_at, detailed)),
         data.codex
             .as_ref()
-            .and_then(|usage| poller::time_until_display_change(usage.session.resets_at)),
+            .and_then(|usage| poller::time_until_display_change(usage.session.resets_at, detailed)),
         data.codex
             .as_ref()
-            .and_then(|usage| poller::time_until_display_change(usage.weekly.resets_at)),
+            .and_then(|usage| poller::time_until_display_change(usage.weekly.resets_at, detailed)),
         data.antigravity
             .as_ref()
-            .and_then(|usage| poller::time_until_display_change(usage.session.resets_at)),
+            .and_then(|usage| poller::time_until_display_change(usage.session.resets_at, detailed)),
         data.antigravity
             .as_ref()
-            .and_then(|usage| poller::time_until_display_change(usage.weekly.resets_at)),
+            .and_then(|usage| poller::time_until_display_change(usage.weekly.resets_at, detailed)),
     ];
     let min_delay = delays.into_iter().flatten().min();
 
@@ -3346,6 +3379,16 @@ unsafe extern "system" fn wnd_proc(
                     // elapse before it ever acts.
                     schedule_auto_update_check(hwnd);
                 }
+                IDM_DETAILED_TIME => {
+                    DETAILED_TIME.store(!detailed_time(), Ordering::Relaxed);
+                    save_state_settings();
+                    // The countdown text, the column it sits in and how often it
+                    // ticks all change together.
+                    update_display();
+                    position_at_taskbar();
+                    render_layered();
+                    schedule_countdown_timer();
+                }
                 IDM_PACE_COLORS | IDM_SCOPED_WEEKLY_ROW => {
                     {
                         let mut state = lock_state();
@@ -3664,6 +3707,19 @@ fn show_context_menu(hwnd: HWND) {
             scoped_row_flags,
             IDM_SCOPED_WEEKLY_ROW as usize,
             PCWSTR::from_raw(scoped_row_str.as_ptr()),
+        );
+
+        let detailed_time_str = native_interop::wide_str(strings.detailed_time);
+        let detailed_time_flags = if detailed_time() {
+            MF_CHECKED
+        } else {
+            MENU_ITEM_FLAGS(0)
+        };
+        let _ = AppendMenuW(
+            settings_menu,
+            detailed_time_flags,
+            IDM_DETAILED_TIME as usize,
+            PCWSTR::from_raw(detailed_time_str.as_ptr()),
         );
 
         let auto_updates_str = native_interop::wide_str(strings.auto_install_updates);
@@ -4036,7 +4092,7 @@ fn draw_row(
 fn model_usage_width(segment_count: i32) -> i32 {
     (sc(SEGMENT_W) + sc(SEGMENT_GAP)) * segment_count - sc(SEGMENT_GAP)
         + sc(BAR_RIGHT_MARGIN)
-        + sc(TEXT_WIDTH)
+        + sc(text_width())
 }
 
 fn draw_usage_bar(
@@ -4109,7 +4165,7 @@ fn draw_usage_bar(
         let mut text_rect = RECT {
             left: text_x,
             top: y,
-            right: text_x + sc(TEXT_WIDTH),
+            right: text_x + sc(text_width()),
             bottom: y + seg_h,
         };
         let _ = SetTextColor(hdc, COLORREF(text_color.to_colorref()));

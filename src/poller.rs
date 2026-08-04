@@ -1594,10 +1594,11 @@ fn is_leap(y: u64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-/// Format a usage section as "X% · Yh" style text
-pub fn format_line(section: &UsageSection, strings: Strings) -> String {
+/// Format a usage section as "X% · Yh" style text, or "X% · Yh Zm" when the
+/// countdown is set to be detailed.
+pub fn format_line(section: &UsageSection, strings: Strings, detailed: bool) -> String {
     let pct = format!("{:.0}%", section.percentage);
-    let cd = format_countdown(section.resets_at, strings);
+    let cd = format_countdown(section.resets_at, strings, detailed);
     if cd.is_empty() {
         pct
     } else {
@@ -1605,7 +1606,7 @@ pub fn format_line(section: &UsageSection, strings: Strings) -> String {
     }
 }
 
-fn format_countdown(resets_at: Option<SystemTime>, strings: Strings) -> String {
+fn format_countdown(resets_at: Option<SystemTime>, strings: Strings, detailed: bool) -> String {
     let reset = match resets_at {
         Some(t) => t,
         None => return String::new(),
@@ -1616,48 +1617,119 @@ fn format_countdown(resets_at: Option<SystemTime>, strings: Strings) -> String {
         Err(_) => return strings.now.to_string(),
     };
 
-    format_countdown_from_secs(remaining.as_secs(), strings)
+    format_countdown_from_secs(remaining.as_secs(), strings, detailed)
 }
 
 /// Calculate how long until the display text would change
-pub fn time_until_display_change(resets_at: Option<SystemTime>) -> Option<Duration> {
+pub fn time_until_display_change(
+    resets_at: Option<SystemTime>,
+    detailed: bool,
+) -> Option<Duration> {
     let reset = resets_at?;
     let remaining = reset.duration_since(SystemTime::now()).ok()?;
-    Some(time_until_display_change_from_secs(remaining.as_secs()))
+    Some(time_until_display_change_from_secs(
+        remaining.as_secs(),
+        detailed,
+    ))
 }
 
-fn format_countdown_from_secs(total_secs: u64, strings: Strings) -> String {
-    let total_mins = total_secs / 60;
-    let total_hours = total_secs / 3600;
-    let total_days = total_secs / 86400;
+const MIN_SECS: u64 = 60;
+const HOUR_SECS: u64 = 60 * MIN_SECS;
+const DAY_SECS: u64 = 24 * HOUR_SECS;
 
-    if total_days >= 1 {
-        format!("{total_days}{}", strings.day_suffix)
-    } else if total_hours >= 1 {
-        format!("{total_hours}{}", strings.hour_suffix)
-    } else if total_mins >= 1 {
-        format!("{total_mins}{}", strings.minute_suffix)
-    } else {
-        format!("{total_secs}{}", strings.second_suffix)
+fn round_div(n: u64, unit: u64) -> u64 {
+    (n + unit / 2) / unit
+}
+
+fn format_countdown_from_secs(total_secs: u64, strings: Strings, detailed: bool) -> String {
+    if detailed {
+        return format_detailed_countdown(total_secs, strings);
     }
-}
 
-fn time_until_display_change_from_secs(total_secs: u64) -> Duration {
-    let total_mins = total_secs / 60;
-    let total_hours = total_secs / 3600;
-    let total_days = total_secs / 86400;
-
-    let current_bucket_start = if total_days >= 1 {
-        total_days * 86400
-    } else if total_hours >= 1 {
-        total_hours * 3600
-    } else if total_mins >= 1 {
-        total_mins * 60
+    // The unit is picked by magnitude, then rounded to the nearest whole unit, so
+    // 3h59m reads "4h" rather than understating it as "3h". Rounding can fill the
+    // unit, which promotes to the next one instead of printing "24h" or "60m".
+    let (value, suffix) = if total_secs >= DAY_SECS {
+        (round_div(total_secs, DAY_SECS), strings.day_suffix)
+    } else if total_secs >= HOUR_SECS {
+        match round_div(total_secs, HOUR_SECS) {
+            24 => (1, strings.day_suffix),
+            hours => (hours, strings.hour_suffix),
+        }
+    } else if total_secs >= MIN_SECS {
+        match round_div(total_secs, MIN_SECS) {
+            60 => (1, strings.hour_suffix),
+            mins => (mins, strings.minute_suffix),
+        }
     } else {
-        total_secs
+        (total_secs, strings.second_suffix)
     };
 
-    Duration::from_secs(total_secs.saturating_sub(current_bucket_start) + 1)
+    format!("{value}{suffix}")
+}
+
+/// Hours *and* minutes ("3h59m") instead of one rounded unit ("4h"), for anyone who
+/// would rather read the exact figure than a tidy one. The pair is truncated rather
+/// than rounded: the finer unit already carries the precision the rounding hid.
+fn format_detailed_countdown(total_secs: u64, strings: Strings) -> String {
+    let (unit, finer, unit_suffix, finer_suffix) = if total_secs >= DAY_SECS {
+        (DAY_SECS, HOUR_SECS, strings.day_suffix, strings.hour_suffix)
+    } else if total_secs >= HOUR_SECS {
+        (
+            HOUR_SECS,
+            MIN_SECS,
+            strings.hour_suffix,
+            strings.minute_suffix,
+        )
+    } else if total_secs >= MIN_SECS {
+        // No coarser unit left to pair with, and these minutes are exact instead of
+        // rounded, so one unit already says everything the detailed form would.
+        return format!("{}{}", total_secs / MIN_SECS, strings.minute_suffix);
+    } else {
+        return format!("{total_secs}{}", strings.second_suffix);
+    };
+
+    let value = total_secs / unit;
+    let finer_value = (total_secs % unit) / finer;
+    // Padded so the column does not jitter between "3h05m" and "3h5m".
+    format!("{value}{unit_suffix}{finer_value:02}{finer_suffix}")
+}
+
+fn time_until_display_change_from_secs(total_secs: u64, detailed: bool) -> Duration {
+    if detailed {
+        // The truncated finer unit of the pair is what ticks, so the text changes
+        // when it does: hours under a day, minutes under an hour, else seconds.
+        let step = if total_secs >= DAY_SECS {
+            HOUR_SECS
+        } else if total_secs >= MIN_SECS {
+            MIN_SECS
+        } else {
+            1
+        };
+        return Duration::from_secs(total_secs % step + 1);
+    }
+
+    let (unit, finer) = if total_secs >= DAY_SECS {
+        (DAY_SECS, HOUR_SECS)
+    } else if total_secs >= HOUR_SECS {
+        (HOUR_SECS, MIN_SECS)
+    } else if total_secs >= MIN_SECS {
+        (MIN_SECS, 1)
+    } else {
+        return Duration::from_secs(1);
+    };
+
+    // Rounding half up shows the same value down to `value * unit - unit / 2`. At value 1
+    // the string also survives below the unit, because the finer bucket rounds back up
+    // into it ("1h" covers 59m30s), so that edge sits half a finer unit lower.
+    let value = round_div(total_secs, unit);
+    let bucket_start = if value == 1 {
+        unit - finer / 2
+    } else {
+        value * unit - unit / 2
+    };
+
+    Duration::from_secs(total_secs.saturating_sub(bucket_start) + 1)
 }
 
 /// Returns true if either section has reached "now" (reset time has passed).
@@ -1676,6 +1748,82 @@ pub fn app_is_past_reset(data: &AppUsageData) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn english() -> Strings {
+        crate::localization::LanguageId::English.strings()
+    }
+
+    const COUNTDOWN_PROBES: [u64; 12] = [
+        59, 60, 3599, 3600, 12599, 14340, 14380, 84599, 86399, 86400, 91800, 600_000,
+    ];
+
+    /// The bar has room for one unit, so it rounds to the nearest one instead of
+    /// flooring, and the redraw timer has to wake up exactly when that string changes.
+    #[test]
+    fn rounds_the_countdown_to_the_nearest_unit() {
+        let s = english();
+        let fmt = |secs| format_countdown_from_secs(secs, s, false);
+
+        assert_eq!(
+            fmt(14340),
+            "4h",
+            "3h59m rounds up, it no longer floors to 3h"
+        );
+        assert_eq!(fmt(12599), "3h", "3h29m59s rounds down");
+        assert_eq!(
+            fmt(86399),
+            "1d",
+            "23h59m59s promotes instead of showing 24h"
+        );
+        assert_eq!(fmt(3599), "1h", "59m59s promotes instead of showing 60m");
+        assert_eq!(fmt(59), "59s", "seconds stay exact");
+    }
+
+    /// The detailed setting trades the tidy figure for the exact one.
+    #[test]
+    fn the_detailed_countdown_shows_two_units_without_rounding() {
+        let s = english();
+        let fmt = |secs| format_countdown_from_secs(secs, s, true);
+
+        assert_eq!(
+            fmt(14340),
+            "3h59m",
+            "the minutes are shown, not rounded away"
+        );
+        assert_eq!(fmt(14380), "3h59m", "the seconds below them are dropped");
+        assert_eq!(fmt(11100), "3h05m", "padded so the column cannot jitter");
+        assert_eq!(fmt(600_000), "6d22h", "days pair with hours");
+        assert_eq!(fmt(3599), "59m", "under an hour the minutes are exact");
+        assert_eq!(fmt(59), "59s", "seconds stay exact");
+    }
+
+    /// Both modes have to keep the redraw timer honest: the widget must wake up when
+    /// its text changes, and no earlier, or it burns repaints for nothing.
+    #[test]
+    fn the_countdown_wakes_up_exactly_when_its_text_changes() {
+        let s = english();
+
+        for detailed in [false, true] {
+            let fmt = |secs| format_countdown_from_secs(secs, s, detailed);
+            for secs in COUNTDOWN_PROBES {
+                let delay = time_until_display_change_from_secs(secs, detailed).as_secs();
+                assert!(
+                    delay >= 1 && delay <= secs,
+                    "{secs}s (detailed {detailed}): bogus delay {delay}s"
+                );
+                assert_eq!(
+                    fmt(secs - delay + 1),
+                    fmt(secs),
+                    "{secs}s (detailed {detailed}): text changed before the {delay}s wake-up"
+                );
+                assert_ne!(
+                    fmt(secs - delay),
+                    fmt(secs),
+                    "{secs}s (detailed {detailed}): text had not changed yet at the {delay}s wake-up"
+                );
+            }
+        }
+    }
 
     fn usage_with_session_percent(percentage: f64) -> UsageData {
         UsageData {

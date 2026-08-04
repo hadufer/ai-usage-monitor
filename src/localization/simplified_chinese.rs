@@ -49,5 +49,6 @@ pub(super) const STRINGS: Strings = Strings {
     second_suffix: "秒",
     pace_colors: "按消耗速度着色",
     scoped_weekly_row: "各模型周用量行",
+    detailed_time: "详细时间 (时与分)",
     auto_install_updates: "自动安装更新",
 };

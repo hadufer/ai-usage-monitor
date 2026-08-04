@@ -49,5 +49,6 @@ pub(super) const STRINGS: Strings = Strings {
     second_suffix: "s",
     pace_colors: "Kleur op tempo",
     scoped_weekly_row: "Wekelijkse rij per model",
+    detailed_time: "Gedetailleerde tijd (uren en minuten)",
     auto_install_updates: "Updates automatisch installeren",
 };

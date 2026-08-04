@@ -49,5 +49,6 @@ pub(super) const STRINGS: Strings = Strings {
     second_suffix: "秒",
     pace_colors: "ペースで色分け",
     scoped_weekly_row: "モデル別の週間行",
+    detailed_time: "詳細な残り時間 (時間と分)",
     auto_install_updates: "更新を自動的にインストール",
 };
