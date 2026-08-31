@@ -10,7 +10,7 @@
 > machines across session locks. All of it is configurable from the settings
 > file. Everything else is upstream's work.
 
-![Screenshot](.github/animation.gif)
+![Screenshot](.github/widget.png)
 
 A lightweight Windows taskbar widget for people already using Claude Code, with optional Codex and Google Antigravity usage display.
 
@@ -54,25 +54,21 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 
 ## Install
 
-Download **`claude-code-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it. It installs under your own profile, so it never asks for administrator rights, and it gives you a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally puts the command on your `PATH`.
+```powershell
+winget install hadufer.ClaudeCodeUsageMonitor
+```
 
-If you would rather keep it portable, `claude-code-usage-monitor.exe` from the same page runs on its own with nothing installed.
+That is the recommended way: it installs under your own profile, so it never asks for administrator rights, and `winget upgrade` keeps it current. If WinGet reports `No package found matching input criteria`, run `winget source update` first — your index is older than the package.
 
-Both are built by CI from the tagged commit. Neither is code-signed, so Windows SmartScreen will warn you the first time: choose **More info** then **Run anyway**, or check the SHA256 against the release notes if you prefer.
+If you would rather not use WinGet, download **`claude-code-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it. It gives you the same per-user install: a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally the command on your `PATH`. Or take `claude-code-usage-monitor.exe` from the same page, which runs on its own with nothing installed.
+
+All of them are built by CI from the tagged commit. None are code-signed, so Windows SmartScreen will warn you the first time you run a downloaded exe: choose **More info** then **Run anyway**, or check the SHA256 against the release notes if you prefer.
 
 The installer takes the usual silent switches, if you are deploying it:
 
 ```powershell
 claude-code-usage-monitor-setup.exe /SILENT /NORESTART
 ```
-
-A WinGet package is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/408338). Once it is merged, this will work too:
-
-```powershell
-winget install hadufer.ClaudeCodeUsageMonitor
-```
-
-Until then that command reports `No package found matching input criteria`, because the identifier does not exist in the catalogue yet.
 
 The upstream package, `CodeZeno.ClaudeCodeUsageMonitor`, is a different one. Both
 provide the same `claude-code-usage-monitor` command, so uninstall one before
