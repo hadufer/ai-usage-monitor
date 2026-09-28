@@ -29,3 +29,9 @@ AGENTS.md
 
 # Installer output
 /installer/out/
+
+# Impeccable working files: decision mocks, review captures, local caches
+/.impeccable/mocks/
+/.impeccable/review/
+/.impeccable/questions/
+/.impeccable/hook.cache.json

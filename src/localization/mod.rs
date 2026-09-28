@@ -193,6 +193,18 @@ pub struct Strings {
     pub antigravity_token_expired_body: &'static str,
     pub codex_window_title: &'static str,
     pub antigravity_window_title: &'static str,
+    /// Title of the flyout the widget opens.
+    pub usage_title: &'static str,
+    /// When the data was last read; `{time}` is the local clock time.
+    pub updated_at: &'static str,
+    /// When the limit lands at the current rate; `{time}` is a countdown.
+    pub limit_projection: &'static str,
+    /// Explains the magenta marker on every tape.
+    pub bug_legend: &'static str,
+    /// A provider that could not be read.
+    pub no_data: &'static str,
+    /// A provider whose sign-in was refused.
+    pub sign_in_again: &'static str,
 }
 
 pub fn resolve_language(language_override: Option<LanguageId>) -> LanguageId {

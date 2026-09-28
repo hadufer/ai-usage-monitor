@@ -4,11 +4,14 @@
 # Claude Code Usage Monitor
 
 > This is a fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor).
-> The bars are coloured by how fast you are burning the window rather than by the
-> raw percentage, a third bar tracks the per-model weekly limit, hovering shows
-> each limit's exact reset time, and the widget stays put on multi-monitor
-> machines across session locks. All of it is configurable from the settings
-> file. Everything else is upstream's work.
+> The widget is redrawn as an instrument panel: each limit is a tape whose fill
+> is what you used and whose magenta marker is where the clock says you should
+> be, coloured by how fast you are burning the window rather than by the raw
+> percentage. A click opens a panel with every limit, its exact reset time and a
+> warning when you would hit it first; the per-model weekly limit is tracked
+> too, and the widget stays put on multi-monitor machines across session locks.
+> All of it is configurable from the settings file. Everything else is
+> upstream's work.
 
 ![Screenshot](.github/widget.png)
 
@@ -18,12 +21,12 @@ It sits in your taskbar and shows how much of your Claude Code, Codex, and/or An
 
 ## What You Get
 
-- A **5h** bar for your current 5-hour Claude usage window
-- A **7d** bar for your current 7-day window
-- A third bar for the **per-model weekly limit**, labelled with whatever model the API reports it against
-- Hovering the widget shows each limit's **exact reset time**, in your Windows regional format, where the bars only have room for a countdown
+- One row per provider: its **5h** tape, a hairline for its **7d** window under it, the percentage in a box and the countdown to the reset
+- With a single provider, one row per window instead: **5h**, **7d**, and the **per-model weekly limit**, labelled with whatever model the API reports it against
+- A magenta marker on every tape showing **where the clock says you should be**: when the fill runs past it you are burning ahead of the window
+- Tapes coloured by **consumption pace** instead of raw percentage, so 40% used with four hours left reads differently from 40% used with twenty minutes left
+- Click the widget for the **usage panel**: every limit of every provider, its **exact reset time** in your Windows regional format, and a warning when the limit would land before the reset at the current rate
 - The widget stays on one screen: it no longer wanders to another monitor when the session is locked or reattached over RDP
-- Bars coloured by **consumption pace** instead of raw percentage, so 40% used with four hours left reads differently from 40% used with twenty minutes left
 - Optional Codex usage bars alongside Claude Code
 - Optional Antigravity model usage bars for Google's 5-hour and weekly Gemini quota windows
 - A live countdown until each limit resets
@@ -93,7 +96,8 @@ nothing at all, by design, and reports no error.
 
 Once running, it will appear in your taskbar and as one or more tray icons in the notification area.
 
-- Drag the left divider to move the taskbar widget
+- Click the widget to open the usage panel; click it again, press Escape or click anywhere else to close it
+- Drag the widget to move it along the taskbar
 - On multi-monitor setups, drag the widget onto another Windows taskbar to move it to that screen
 - Right-click the taskbar widget or tray icon for refresh, displayed models, update frequency, Start with Windows, reset position, language, updates, and exit
 - Left-click the tray icon to toggle the taskbar widget on or off
@@ -107,7 +111,11 @@ Use the right-click **Models** menu to choose what the widget displays:
 - **Codex** can be enabled alongside Claude Code or shown by itself
 - **Antigravity** can be enabled alongside the other providers or shown by itself as its own model column
 
-When multiple models are shown, each model has its own usage bar and matching usage text color. Antigravity prefers Google's Gemini quota summary when available and falls back to model quota data when needed.
+When multiple models are shown, each gets its own row, marked with a two-letter code: `CL` for Claude, `CX` for Codex, `AG` for Antigravity. Antigravity prefers Google's Gemini quota summary when available and falls back to model quota data when needed.
+
+Providers are listed in one table (`src/providers.rs`) that decides their order, their menu entry and their tray icon, so the widget is no longer wired to exactly three of them. Adding one means adding a table entry, a poller arm, and the few remaining per-provider arms (state storage, row formatting, tray badge colours); the drawing code itself is generic and needs no change.
+
+A row is only filled in when that provider actually reported that window. OpenAI's windows are told apart by their length rather than by the key they arrived under: the 5-hour and weekly limits are recognised from `limit_window_seconds`, because `primary_window` and `secondary_window` are positional names and the server has been seen delivering the weekly window as `primary_window`. A row nobody reported reads `--` instead of an invented `0%`, for every provider rather than for OpenAI alone.
 
 ### System Tray Icon
 
@@ -115,17 +123,23 @@ The tray icon shows your current 5-hour usage as a percentage badge.
 
 If multiple providers are enabled, the app shows one tray icon per provider. If only one model is enabled, it shows one tray icon.
 
-The Claude Code tray icon uses the same pace colours as the Claude bars, with the badge number switching to a dark ink on the light amber band so it stays readable. The Codex tray icon uses a black and white badge style. The Antigravity tray icon uses a blue badge style.
+Each badge is the widget's boxed 5-hour value at icon size: outlined in amber or red when that window is ahead of its pace, and filled red for the one value most over it. Before the first answer the badge shows the provider's code instead, and the Claude one shows the app icon.
 
 Hovering over a tray icon shows the usage values for that model.
 
-### Exact Reset Times
+### The Usage Panel
 
-The bars only have room for a countdown, so hovering the taskbar widget shows the
-wall-clock time each limit resets at, one line per bar. Times follow your Windows
-regional format, and the date is only shown when the reset is not today. The
-conversion goes through your time zone rather than shifting by a fixed offset, so
-a reset on the far side of a daylight-saving change still reads correctly.
+The widget only has room for a countdown, so a click opens a panel with every
+limit of every provider shown: a tape per window, its value, the wall-clock time
+it resets at and the time left. Times follow your Windows regional format, with
+the weekday in front when the reset is not today. The conversion goes through
+your time zone rather than shifting by a fixed offset, so a reset on the far side
+of a daylight-saving change still reads correctly.
+
+When a window is being spent fast enough that the limit would arrive before the
+reset, the panel says so at the top, with how long is left at the current rate.
+Its **Refresh** button polls immediately and **Settings** opens the same menu as a
+right-click. The panel follows the Windows light or dark setting, like the widget.
 
 ## Which Screen It Lives On
 
@@ -169,10 +183,15 @@ of the window in its first twenty minutes still reads red, because it should.
 
 The three bands differ in lightness as well as hue. That is deliberate — three
 equally light traffic-light colours collapse into each other under the common
-forms of colour blindness, and the bars are only thirteen pixels tall.
+forms of colour blindness, and the tapes are only a few pixels tall.
 
-Turn the whole thing off from the right-click **Settings** menu to get upstream's
-flat brand-coloured bars back. Note that pace answers "am I burning too fast for
+The magenta marker on each tape draws the same formula: it sits at the share of
+the window that has gone by, with the same floor on elapsed time, so the fill
+divided by the marker is the pace. Fill short of the marker is green, level with
+it amber, well past it red.
+
+Turn the colouring off from the right-click **Settings** menu to get plain,
+uncoloured tapes; the marker stays, since the time it shows is still true. Note that pace answers "am I burning too fast for
 the time left", not "am I nearly out": near the end of a window pace converges on
 the raw percentage, so a bar that is 95% spent an hour before its reset reads
 amber rather than red.
@@ -181,14 +200,16 @@ amber rather than red.
 
 Anthropic reports a separate weekly allowance for some models. The API does not
 expose it as its own field: it appears inside the response's `limits` array as a
-`weekly_scoped` entry, carrying the model it applies to. The third bar reads it
-from there and takes its label from the model name the API gives, so a rename on
-Anthropic's side follows through instead of leaving a stale label behind.
+`weekly_scoped` entry, carrying the model it applies to. The per-model tape reads
+it from there and takes its label from the model name the API gives, so a rename
+on Anthropic's side follows through instead of leaving a stale label behind.
 
-The bar only appears once the API has actually reported such a limit. Because a
-third row has to fit the taskbar height Windows allows, the rows close up while
-it is shown and the label column widens to hold a model name. Toggle it from the
-right-click **Settings** menu.
+It only appears once the API has actually reported such a limit. It always has
+its column in the usage panel; in the widget it gets a row of its own when Claude
+is the only provider shown, the rows closing up to fit a third one into the
+taskbar's height. With several providers the widget keeps one row each, and the
+per-model limit lives in the panel. Toggle it from the right-click **Settings**
+menu.
 
 One limitation: this data only exists in the usage endpoint's response. When the
 app falls back to reading rate-limit headers from the Messages API, the row stays
@@ -205,9 +226,9 @@ are file-only, because a Windows context menu is a poor place to type a hex code
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `pace_colors` | `true` | Colour by pace instead of raw percentage |
-| `show_scoped_weekly` | `true` | Show the per-model weekly bar |
+| `show_scoped_weekly` | `true` | Show the per-model weekly tape |
 | `detailed_time` | `false` | Show hours *and* minutes (`3h59m`) instead of the nearest hour (`4h`). Widens the widget. Also in the **Settings** menu |
-| `pace_on_track` | `85` | Below this pace, the bar is green |
+| `pace_on_track` | `85` | Below this pace, the tape is green |
 | `pace_at_risk` | `115` | Below this, amber; at or above, red |
 | `pace_min_elapsed_fraction` | `0.1` | Floor on elapsed time, as a fraction of the window |
 | `pace_color_on_track` | `#3F9142` | |
@@ -236,16 +257,18 @@ This writes a log file to:
 %TEMP%\claude-code-usage-monitor.log
 ```
 
-With diagnostics on, that log includes the raw body of the usage response, which
-is how the per-model weekly limit was found in the first place. It holds usage
-percentages and reset times, never a token, and the file is rewritten on every
-run. Diagnostics are off unless you pass the flag.
+With diagnostics on, that log includes the raw body of the usage responses, which
+is how the per-model weekly limit was found in the first place and how the
+OpenAI window shape gets checked against a real account. It holds usage
+percentages, reset times and, on a ChatGPT workspace plan, the account id —
+never a token. The file is rewritten on every run. Diagnostics are off unless
+you pass the flag.
 
 It also records the decisions that are otherwise invisible: which taskbar was
 chosen and whether it was matched by monitor or fallen back to by index, whether
 the background check moved the widget, how long startup waited for the primary
-screen, why a tooltip could not be created, and whether the settings file failed
-to parse. Those exist because each one of them once failed silently.
+screen, and whether the settings file failed to parse. Those exist because each
+one of them once failed silently.
 
 Settings are saved to:
 
@@ -362,7 +385,7 @@ What the app stores locally:
 - Displayed model preferences
 - Pace colouring preferences: the two toggles, the thresholds, the elapsed floor and the three band colours
 - Which monitor the widget is pinned to, and whether pinning is on
-- The last per-model label the API reported, so the third row is laid out correctly on the next start before the first poll answers
+- The last per-model label the API reported, so its row is laid out correctly on the next start before the first poll answers
 
 What it does **not** do:
 

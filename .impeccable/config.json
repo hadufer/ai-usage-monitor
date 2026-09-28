@@ -1,0 +1,53 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/directions.html"
+        ],
+        "createdAt": "2026-09-28T13:04:54.254Z",
+        "reason": "assistant: L113 is the zero-size CSS border triangle drawing the magenta pace bug caret, not a card side-tab"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/directions.html"
+        ],
+        "createdAt": "2026-09-28T13:04:54.312Z",
+        "reason": "assistant: decision mock; the Glass Cockpit direction the user locked carries a one-type-size rule, and the frame mimics the 12px Windows shell clock"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/directions.html"
+        ],
+        "createdAt": "2026-09-28T14:08:52.233Z",
+        "reason": "assistant: decision mock written before DESIGN.md; it renders four competing directions (three unchosen) plus a stand-in wallpaper and taskbar, so it sits outside the chosen system by design"
+      },
+      {
+        "rule": "design-system-radius",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/directions.html"
+        ],
+        "createdAt": "2026-09-28T14:08:52.283Z",
+        "reason": "assistant: decision mock written before DESIGN.md; it renders four competing directions (three unchosen) plus a stand-in wallpaper and taskbar, so it sits outside the chosen system by design"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/directions.html"
+        ],
+        "createdAt": "2026-09-28T14:08:52.330Z",
+        "reason": "assistant: decision mock written before DESIGN.md; it renders four competing directions (three unchosen) plus a stand-in wallpaper and taskbar, so it sits outside the chosen system by design"
+      }
+    ]
+  }
+}

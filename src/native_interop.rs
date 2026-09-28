@@ -1,19 +1,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{BOOL, FILETIME, HWND, LPARAM, RECT, SYSTEMTIME, WPARAM};
+use windows::Win32::Foundation::{BOOL, FILETIME, HWND, LPARAM, RECT, SYSTEMTIME};
 use windows::Win32::Globalization::{
-    GetDateFormatEx, GetTimeFormatEx, DATE_SHORTDATE, TIME_NOSECONDS,
+    GetDateFormatEx, GetTimeFormatEx, ENUM_DATE_FORMATS_FLAGS, TIME_NOSECONDS,
 };
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONULL,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
-use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, TOOLTIPS_CLASS, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTM_SETMAXTIPWIDTH,
-    TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
-};
 use windows::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -34,11 +30,16 @@ pub const TIMER_POLL: usize = 1;
 pub const TIMER_COUNTDOWN: usize = 2;
 pub const TIMER_RESET_POLL: usize = 3;
 pub const TIMER_UPDATE_CHECK: usize = 4;
+/// Frames of the one animation, a tape draining after its window resets.
+pub const TIMER_ANIM: usize = 5;
 
 // Custom messages
 pub const WM_APP: u32 = 0x8000;
 pub const WM_APP_USAGE_UPDATED: u32 = WM_APP + 1;
 pub const WM_APP_TRAY: u32 = WM_APP + 3;
+/// Not generated alongside the other window messages; as a bare name in a
+/// match arm it would bind every message instead of matching one.
+pub const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Clone, Debug)]
 pub struct TaskbarWindow {
@@ -340,7 +341,9 @@ fn format_with(
 }
 
 /// Wall-clock time in the user's regional format, so a 12-hour locale gets
-/// "5:19 PM" and a 24-hour one "17:19" without us choosing.
+/// "5:19 PM" and a 24-hour one "17:19" without us choosing. A time on another
+/// day gets its weekday in front, also from the region: every window resets
+/// within the week, and a weekday is what fits in a flyout column.
 pub fn format_local_time(time: SystemTime) -> Option<String> {
     let parts = to_local_systemtime(time)?;
     let same_day = to_local_systemtime(SystemTime::now())
@@ -360,9 +363,9 @@ pub fn format_local_time(time: SystemTime) -> Option<String> {
     let date = format_with(&parts, |parts, buffer| unsafe {
         GetDateFormatEx(
             PCWSTR::null(),
-            DATE_SHORTDATE,
+            ENUM_DATE_FORMATS_FLAGS(0),
             Some(parts),
-            PCWSTR::null(),
+            windows::core::w!("ddd"),
             Some(buffer),
             PCWSTR::null(),
         )
@@ -398,108 +401,5 @@ mod tests {
         assert!(Color::try_from_hex("#3F914").is_none());
         assert!(Color::try_from_hex("#GGGGGG").is_none());
         assert!(Color::try_from_hex("").is_none());
-    }
-}
-
-/// comctl32 validates `cbSize` against the exact struct version it knows. Without
-/// a v6 manifest we talk to v5, which predates `lpReserved` and rejects the full
-/// size outright.
-fn tool_info_size() -> u32 {
-    (std::mem::size_of::<TTTOOLINFOW>() - std::mem::size_of::<*mut std::ffi::c_void>()) as u32
-}
-
-fn tool_info(parent: HWND, text: &mut [u16]) -> TTTOOLINFOW {
-    TTTOOLINFOW {
-        cbSize: tool_info_size(),
-        uFlags: TTF_IDISHWND | TTF_SUBCLASS,
-        hwnd: parent,
-        uId: parent.0 as usize,
-        lpszText: windows::core::PWSTR::from_raw(text.as_mut_ptr()),
-        ..Default::default()
-    }
-}
-
-/// The tooltip window class only exists once the common controls are loaded,
-/// and this app ships no manifest that would do it for us.
-fn ensure_common_controls() -> bool {
-    unsafe {
-        let init = INITCOMMONCONTROLSEX {
-            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_WIN95_CLASSES,
-        };
-        InitCommonControlsEx(&init).as_bool()
-    }
-}
-
-/// Attach a standard tooltip to `parent`. `TTF_SUBCLASS` lets the control pick
-/// up the hover itself, so the widget keeps its own mouse handling untouched.
-pub fn create_tooltip(parent: HWND, text: &mut [u16]) -> Option<TooltipOutcome> {
-    if !ensure_common_controls() {
-        return Some(TooltipOutcome::CommonControlsFailed);
-    }
-
-    unsafe {
-        // The owner is deliberately None: our widget is a child of another
-        // process's taskbar, and a popup owned by a child window is rejected.
-        // Topmost is explicit: an unowned window inherits nothing, and the
-        // taskbar it has to appear over is itself topmost.
-        let tooltip = match CreateWindowExW(
-            WS_EX_TOPMOST,
-            TOOLTIPS_CLASS,
-            PCWSTR::null(),
-            WINDOW_STYLE(WS_POPUP_STYLE | TTS_ALWAYSTIP | TTS_NOPREFIX),
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            None,
-            None,
-        ) {
-            Ok(tooltip) => tooltip,
-            Err(error) => return Some(TooltipOutcome::CreateFailed(error.code().0 as u32)),
-        };
-
-        let mut info = tool_info(parent, text);
-        let added = SendMessageW(
-            tooltip,
-            TTM_ADDTOOLW,
-            WPARAM(0),
-            LPARAM(&mut info as *mut TTTOOLINFOW as isize),
-        );
-        if added.0 == 0 {
-            let _ = DestroyWindow(tooltip);
-            return Some(TooltipOutcome::AddToolFailed);
-        }
-
-        // Without a max width the control ignores newlines and renders one line.
-        SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, WPARAM(0), LPARAM(400));
-        Some(TooltipOutcome::Created(tooltip))
-    }
-}
-
-/// Why the tooltip could not be attached, so a failure is diagnosable instead
-/// of silently absent.
-#[derive(Debug)]
-pub enum TooltipOutcome {
-    Created(HWND),
-    CommonControlsFailed,
-    CreateFailed(u32),
-    AddToolFailed,
-}
-
-/// `text` must outlive the tooltip: the control keeps the pointer rather than
-/// copying. Callers keep the buffer in app state and only swap it from the UI
-/// thread, which is also the only thread the control reads it on.
-pub fn set_tooltip_text(tooltip: HWND, parent: HWND, text: &mut [u16]) {
-    unsafe {
-        let mut info = tool_info(parent, text);
-        SendMessageW(
-            tooltip,
-            TTM_UPDATETIPTEXTW,
-            WPARAM(0),
-            LPARAM(&mut info as *mut TTTOOLINFOW as isize),
-        );
     }
 }

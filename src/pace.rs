@@ -82,6 +82,28 @@ impl Settings {
     }
 }
 
+/// How much of the window has gone by, as a fraction, with the same floor the
+/// pace uses. It is where the gauge's bug sits, so that the fill divided by the
+/// bug reads as the pace exactly. Independent of the colouring setting: time
+/// passes whether or not the bars are coloured by it.
+pub fn elapsed_fraction(
+    section: &UsageSection,
+    window: Duration,
+    now: SystemTime,
+    settings: &Settings,
+) -> Option<f64> {
+    let resets_at = section.resets_at?;
+    let remaining = resets_at.duration_since(now).ok()?.as_secs_f64();
+    let total = window.as_secs_f64();
+    if remaining >= total {
+        return None;
+    }
+
+    // Below the floor a couple of percent spent right after a reset would
+    // divide by almost nothing and paint everything red.
+    Some(((total - remaining) / total).max(settings.min_elapsed_fraction))
+}
+
 /// Consumption rate relative to the time left in the window, on the same scale
 /// as the Claude Code statusline: 100 means "exactly on track to reach 100% at
 /// the reset", above means burning faster than the window allows.
@@ -94,70 +116,33 @@ pub fn pace(
     if !settings.enabled {
         return None;
     }
-
-    let resets_at = section.resets_at?;
-    let remaining = resets_at.duration_since(now).ok()?.as_secs_f64();
-    let total = window.as_secs_f64();
-    if remaining >= total {
-        return None;
-    }
-
-    // Below the floor a couple of percent spent right after a reset would
-    // divide by almost nothing and paint everything red.
-    let elapsed = (total - remaining).max(total * settings.min_elapsed_fraction);
-    Some(section.percentage * total / elapsed)
+    elapsed_fraction(section, window, now, settings).map(|elapsed| section.percentage / elapsed)
 }
 
-fn band(pace: Option<f64>, settings: &Settings) -> Option<Band> {
+/// How long until the limit is reached if the window keeps being spent at the
+/// rate it has been so far, when that lands before the reset. `None` means the
+/// reset comes first, or there is nothing to project from.
+pub fn time_to_limit(
+    section: &UsageSection,
+    window: Duration,
+    now: SystemTime,
+    settings: &Settings,
+) -> Option<Duration> {
+    if section.percentage <= 0.0 || section.percentage >= 100.0 {
+        return None;
+    }
+    let elapsed = elapsed_fraction(section, window, now, settings)? * window.as_secs_f64();
+    let remaining = section.resets_at?.duration_since(now).ok()?.as_secs_f64();
+    let to_limit = (100.0 - section.percentage) * elapsed / section.percentage;
+    (to_limit < remaining).then(|| Duration::from_secs_f64(to_limit))
+}
+
+pub fn band(pace: Option<f64>, settings: &Settings) -> Option<Band> {
     match pace? {
         pace if pace < settings.on_track => Some(Band::OnTrack),
         pace if pace < settings.at_risk => Some(Band::AtRisk),
         _ => Some(Band::Over),
     }
-}
-
-pub fn pace_color(pace: Option<f64>, settings: &Settings, fallback: Color) -> Color {
-    match band(pace, settings) {
-        Some(Band::OnTrack) => settings.on_track_color,
-        Some(Band::AtRisk) => settings.at_risk_color,
-        Some(Band::Over) => settings.over_color,
-        None => fallback,
-    }
-}
-
-/// Ink for text drawn on top of `pace_color`. A light band cannot carry white
-/// text, so the ink follows the luminance of the band it sits on.
-pub fn pace_ink(pace: Option<f64>, settings: &Settings, fallback: Color) -> Color {
-    match band(pace, settings) {
-        Some(_) => {
-            let fill = pace_color(pace, settings, fallback);
-            if is_light(fill) {
-                Color::from_hex("#111111")
-            } else {
-                Color::from_hex("#FFFFFF")
-            }
-        }
-        None => fallback,
-    }
-}
-
-fn is_light(color: Color) -> bool {
-    let luminance =
-        0.299 * color.r as f64 + 0.587 * color.g as f64 + 0.114 * color.b as f64;
-    luminance > 150.0
-}
-
-pub fn section_color(
-    section: &UsageSection,
-    window: Duration,
-    settings: &Settings,
-    fallback: Color,
-) -> Color {
-    pace_color(
-        pace(section, window, SystemTime::now(), settings),
-        settings,
-        fallback,
-    )
 }
 
 #[cfg(test)]
@@ -202,34 +187,15 @@ mod tests {
     }
 
     #[test]
-    fn a_light_band_takes_a_dark_ink() {
-        let settings = Settings::default();
-        let black = Color::new(0, 0, 0);
-        let on_amber = pace_ink(Some(100.0), &settings, black);
-        let on_green = pace_ink(Some(10.0), &settings, black);
-        let on_red = pace_ink(Some(200.0), &settings, black);
-        assert_eq!((on_amber.r, on_amber.g, on_amber.b), (0x11, 0x11, 0x11));
-        assert_eq!((on_green.r, on_green.g, on_green.b), (0xFF, 0xFF, 0xFF));
-        assert_eq!((on_red.r, on_red.g, on_red.b), (0xFF, 0xFF, 0xFF));
-    }
-
-    #[test]
-    fn disabling_the_setting_falls_back_everywhere() {
+    fn disabling_the_setting_drops_the_pace_but_not_the_clock() {
         let settings = Settings {
             enabled: false,
             ..Settings::default()
         };
-        let unknown = pace(
-            &section(90.0, Duration::from_secs(9_000)),
-            SESSION_WINDOW,
-            SystemTime::UNIX_EPOCH,
-            &settings,
-        );
-        assert!(unknown.is_none());
-
-        let fallback = Color::new(0xD9, 0x77, 0x57);
-        let color = pace_color(unknown, &settings, fallback);
-        assert_eq!((color.r, color.g, color.b), (0xD9, 0x77, 0x57));
+        let half_spent = section(90.0, Duration::from_secs(9_000));
+        let now = SystemTime::UNIX_EPOCH;
+        assert!(pace(&half_spent, SESSION_WINDOW, now, &settings).is_none());
+        assert_eq!(elapsed_fraction(&half_spent, SESSION_WINDOW, now, &settings), Some(0.5));
     }
 
     #[test]
@@ -240,10 +206,36 @@ mod tests {
             resets_at: None,
         };
         assert!(pace(&unknown, SESSION_WINDOW, SystemTime::UNIX_EPOCH, &settings).is_none());
+        assert!(elapsed_fraction(&unknown, SESSION_WINDOW, SystemTime::UNIX_EPOCH, &settings).is_none());
+    }
 
-        let fallback = Color::new(0xD9, 0x77, 0x57);
-        let color = section_color(&unknown, SESSION_WINDOW, &settings, fallback);
-        assert_eq!((color.r, color.g, color.b), (0xD9, 0x77, 0x57));
+    #[test]
+    fn the_bug_sits_where_fill_over_bug_is_the_pace() {
+        let settings = Settings::default();
+        let now = SystemTime::UNIX_EPOCH;
+        // 62% with 2h10 of 5h left: the example the flyout mock was drawn from.
+        let claude = section(62.0, Duration::from_secs(2 * 3600 + 600));
+        let bug = elapsed_fraction(&claude, SESSION_WINDOW, now, &settings).unwrap();
+        let pace = pace(&claude, SESSION_WINDOW, now, &settings).unwrap();
+        assert!((62.0 / bug - pace).abs() < 1e-9);
+        // Right after a reset the bug waits at the floor instead of at zero.
+        let fresh = section(1.0, Duration::from_secs(17_880));
+        assert_eq!(elapsed_fraction(&fresh, SESSION_WINDOW, now, &settings), Some(0.1));
+    }
+
+    #[test]
+    fn projects_the_limit_only_when_it_lands_before_the_reset() {
+        let settings = Settings::default();
+        let now = SystemTime::UNIX_EPOCH;
+        let projection = |percentage, remaining| {
+            time_to_limit(&section(percentage, Duration::from_secs(remaining)), SESSION_WINDOW, now, &settings)
+        };
+        // Exactly on track reaches 100% at the reset, which is not "before".
+        assert_eq!(projection(50.0, 9_000), None);
+        // 60% in the first 2.5h: the remaining 40% goes in another 100 minutes.
+        assert_eq!(projection(60.0, 9_000), Some(Duration::from_secs(6_000)));
+        assert_eq!(projection(0.0, 9_000), None);
+        assert_eq!(projection(100.0, 9_000), None);
     }
 
     #[test]

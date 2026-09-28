@@ -12,6 +12,7 @@ use std::os::windows::process::CommandExt;
 use crate::diagnose;
 use crate::localization::Strings;
 use crate::models::{AppUsageData, ScopedUsage, UsageData, UsageSection};
+use crate::providers::ProviderId;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -99,8 +100,17 @@ struct CodexRateLimitDetails {
 
 #[derive(Deserialize)]
 struct CodexRateLimitWindow {
-    used_percent: f64,
-    reset_at: i64,
+    /// 0-100. Optional: a window the server reports without a usable figure is
+    /// not worth failing the whole response over.
+    #[serde(default)]
+    used_percent: Option<f64>,
+    /// Unix seconds. Zero means "no reset time", not "reset at the epoch".
+    #[serde(default)]
+    reset_at: Option<i64>,
+    /// Length of the window in seconds. This, not the key it arrived under, is
+    /// what tells a 5-hour window from a weekly one.
+    #[serde(default)]
+    limit_window_seconds: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -191,70 +201,42 @@ extern "system" {
     fn CredFree(buffer: *mut c_void);
 }
 
-pub fn poll(
-    show_claude_code: bool,
-    show_codex: bool,
-    show_antigravity: bool,
-) -> Result<AppUsageData, PollError> {
-    poll_with(
-        show_claude_code,
-        show_codex,
-        show_antigravity,
-        poll_claude_code,
-        poll_codex,
-        poll_antigravity,
-    )
+pub fn poll(active: &[ProviderId]) -> Result<AppUsageData, PollError> {
+    poll_with(active, poll_provider)
 }
 
+fn poll_provider(provider: ProviderId) -> Result<UsageData, PollError> {
+    match provider {
+        ProviderId::ClaudeCode => poll_claude_code(),
+        ProviderId::Codex => poll_codex(),
+        ProviderId::Antigravity => poll_antigravity(),
+    }
+}
+
+/// Polls every active provider in turn. One provider failing never blocks the
+/// others: the failure is only surfaced when nothing at all came back.
 fn poll_with(
-    show_claude_code: bool,
-    show_codex: bool,
-    show_antigravity: bool,
-    mut poll_claude_code: impl FnMut() -> Result<UsageData, PollError>,
-    mut poll_codex: impl FnMut() -> Result<UsageData, PollError>,
-    mut poll_antigravity: impl FnMut() -> Result<UsageData, PollError>,
+    active: &[ProviderId],
+    mut poll_one: impl FnMut(ProviderId) -> Result<UsageData, PollError>,
 ) -> Result<AppUsageData, PollError> {
     let mut data = AppUsageData::default();
     let mut first_error = None;
-    let active_provider_count = show_claude_code as u8 + show_codex as u8 + show_antigravity as u8;
 
-    if show_claude_code {
-        match poll_claude_code() {
-            Ok(claude_code) => data.claude_code = Some(claude_code),
+    for &provider in active {
+        match poll_one(provider) {
+            Ok(usage) => data.set(provider, usage),
             Err(error) => {
-                if active_provider_count > 1 {
-                    diagnose::log(format!("Claude Code usage poll failed: {error:?}"));
+                // With a single provider on screen the widget already shows the
+                // failure, so logging it would only be noise.
+                if active.len() > 1 {
+                    diagnose::log(format!("{provider:?} usage poll failed: {error:?}"));
                 }
                 first_error.get_or_insert(error);
             }
         }
     }
 
-    if show_codex {
-        match poll_codex() {
-            Ok(codex) => data.codex = Some(codex),
-            Err(error) => {
-                if active_provider_count > 1 {
-                    diagnose::log(format!("Codex usage poll failed: {error:?}"));
-                }
-                first_error.get_or_insert(error);
-            }
-        }
-    }
-
-    if show_antigravity {
-        match poll_antigravity() {
-            Ok(antigravity) => data.antigravity = Some(antigravity),
-            Err(error) => {
-                if active_provider_count > 1 {
-                    diagnose::log(format!("Antigravity usage poll failed: {error:?}"));
-                }
-                first_error.get_or_insert(error);
-            }
-        }
-    }
-
-    if data.claude_code.is_none() && data.codex.is_none() && data.antigravity.is_none() {
+    if data.is_empty() {
         Err(first_error.unwrap_or(PollError::RequestFailed))
     } else {
         Ok(data)
@@ -894,7 +876,22 @@ fn fetch_codex_usage(token: &str, account_id: Option<&str>) -> Result<UsageData,
         }
     };
 
-    let response: CodexUsageResponse = match resp.into_json() {
+    let body = match resp.into_string() {
+        Ok(body) => body,
+        Err(error) => {
+            diagnose::log_error("unable to read Codex usage response", error);
+            return Err(PollError::RequestFailed);
+        }
+    };
+    if diagnose::is_enabled() {
+        // Same reason the Claude path logs its own body: this is how the shape
+        // of the response gets checked against a real account instead of
+        // against a guess. It holds usage percentages, reset timestamps and,
+        // on a workspace plan, the account id — never a token.
+        diagnose::log(format!("Codex usage endpoint raw body: {body}"));
+    }
+
+    let response: CodexUsageResponse = match serde_json::from_str(&body) {
         Ok(response) => response,
         Err(error) => {
             diagnose::log_error("unable to parse Codex usage response", error);
@@ -902,29 +899,122 @@ fn fetch_codex_usage(token: &str, account_id: Option<&str>) -> Result<UsageData,
         }
     };
 
-    codex_usage_from_response(response).ok_or(PollError::RequestFailed)
+    match codex_usage_from_response(response) {
+        Some(usage) => Ok(usage),
+        None => {
+            // Distinguishable in the log from a transport failure, which is
+            // the whole point of not inventing a 0% for this case.
+            diagnose::log("Codex usage response held no usable rate-limit window");
+            Err(PollError::RequestFailed)
+        }
+    }
 }
 
+/// Windows are told apart by their declared length, never by which key they
+/// arrived under: `primary_window` and `secondary_window` are positional names,
+/// and the server has been observed putting a weekly window in `primary_window`
+/// with `secondary_window` empty.
 fn codex_usage_from_response(response: CodexUsageResponse) -> Option<UsageData> {
-    let details = *response.rate_limit.flatten()?;
+    let Some(details) = response.rate_limit.flatten() else {
+        // No rate-limit block at all: nothing to show. Treated as a failed
+        // read rather than as "zero used".
+        return None;
+    };
+
     let mut data = UsageData::default();
+    let mut session_set = false;
+    let mut weekly_set = false;
 
-    if let Some(window) = details.primary_window.flatten() {
-        data.session = codex_section_from_window(&window);
+    let windows = [
+        (details.primary_window.flatten(), CodexWindowFallback::Session),
+        (details.secondary_window.flatten(), CodexWindowFallback::Weekly),
+    ];
+
+    for (window, fallback) in windows {
+        let Some(window) = window else { continue };
+
+        let is_session = codex_window_kind(&window, fallback) == CodexWindowKind::Session;
+        if (is_session && session_set) || (!is_session && weekly_set) {
+            continue;
+        }
+
+        // A window with no usable percentage carries no information: leave the
+        // row alone instead of publishing it as a zero.
+        let Some(section) = codex_section_from_window(&window) else {
+            continue;
+        };
+
+        if is_session {
+            data.session = section;
+            session_set = true;
+        } else {
+            data.weekly = section;
+            weekly_set = true;
+        }
     }
 
-    if let Some(window) = details.secondary_window.flatten() {
-        data.weekly = codex_section_from_window(&window);
+    if session_set || weekly_set {
+        Some(data)
+    } else {
+        None
     }
-
-    Some(data)
 }
 
-fn codex_section_from_window(window: &CodexRateLimitWindow) -> UsageSection {
-    UsageSection {
-        percentage: window.used_percent,
-        resets_at: unix_to_system_time(Some(window.reset_at)),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CodexWindowKind {
+    Session,
+    Weekly,
+}
+
+/// Which row a window goes to when its length is missing or unfamiliar. The
+/// positional key is the only hint left in that case, so it is used here and
+/// only here.
+#[derive(Clone, Copy)]
+enum CodexWindowFallback {
+    Session,
+    Weekly,
+}
+
+/// A day in minutes. The two nominal lengths the server reports are 300
+/// (five hours) and 10 080 (a week), so a day sits between them with room to
+/// spare: anything shorter is the short window, anything at or above it is a
+/// weekly-style allowance. Windows reported a few percent off their nominal
+/// length therefore land in the right row without a tolerance of their own.
+const DAY_MINUTES: f64 = 1_440.0;
+
+fn codex_window_kind(
+    window: &CodexRateLimitWindow,
+    fallback: CodexWindowFallback,
+) -> CodexWindowKind {
+    let fallback_kind = match fallback {
+        CodexWindowFallback::Session => CodexWindowKind::Session,
+        CodexWindowFallback::Weekly => CodexWindowKind::Weekly,
+    };
+
+    let Some(seconds) = window.limit_window_seconds.filter(|seconds| *seconds > 0) else {
+        return fallback_kind;
+    };
+    let minutes = (seconds as f64 + 59.0) / 60.0;
+
+    if minutes >= DAY_MINUTES {
+        CodexWindowKind::Weekly
+    } else {
+        CodexWindowKind::Session
     }
+}
+
+fn codex_section_from_window(window: &CodexRateLimitWindow) -> Option<UsageSection> {
+    let percentage = window.used_percent?;
+    // A zero timestamp means "no known reset", not "reset at the epoch".
+    let resets_at = window
+        .reset_at
+        .filter(|secs| *secs > 0)
+        .and_then(|secs| unix_to_system_time(Some(secs)));
+
+    Some(UsageSection {
+        percentage,
+        resets_at,
+    })
 }
 
 fn antigravity_credential_watch_signature() -> String {
@@ -1236,7 +1326,10 @@ fn unix_to_system_time(unix_secs: Option<i64>) -> Option<SystemTime> {
     if secs < 0 {
         return None;
     }
-    Some(UNIX_EPOCH + Duration::from_secs(secs as u64))
+    // An out-of-range timestamp is treated as "no reset time" rather than
+    // taking the process down: `panic = "abort"` is set, so adding blindly here
+    // would end the widget instead of dropping one row.
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))
 }
 
 struct Credentials {
@@ -1606,7 +1699,13 @@ pub fn format_line(section: &UsageSection, strings: Strings, detailed: bool) -> 
     }
 }
 
-fn format_countdown(resets_at: Option<SystemTime>, strings: Strings, detailed: bool) -> String {
+/// The countdown alone, without the percentage: the widget's featured window
+/// writes the two in different inks.
+pub fn format_countdown(
+    resets_at: Option<SystemTime>,
+    strings: Strings,
+    detailed: bool,
+) -> String {
     let reset = match resets_at {
         Some(t) => t,
         None => return String::new(),
@@ -1740,9 +1839,7 @@ pub fn is_past_reset(data: &UsageData) -> bool {
 }
 
 pub fn app_is_past_reset(data: &AppUsageData) -> bool {
-    data.claude_code.as_ref().is_some_and(is_past_reset)
-        || data.codex.as_ref().is_some_and(is_past_reset)
-        || data.antigravity.as_ref().is_some_and(is_past_reset)
+    data.iter().any(|entry| is_past_reset(&entry.data))
 }
 
 #[cfg(test)]
@@ -1914,48 +2011,62 @@ mod tests {
         assert!(scoped_weekly(&response.limits).is_none());
     }
 
+    fn codex_window(used_percent: f64, reset_at: i64, window_seconds: i64) -> String {
+        format!(
+            r#"{{"used_percent": {used_percent}, "reset_at": {reset_at}, "limit_window_seconds": {window_seconds}}}"#
+        )
+    }
+
+    fn codex_payload(primary: &str, secondary: &str) -> CodexUsageResponse {
+        let body = format!(
+            r#"{{"rate_limit": {{"primary_window": {primary}, "secondary_window": {secondary}}}}}"#
+        );
+        serde_json::from_str(&body).expect("codex payload should parse")
+    }
+
     #[test]
     fn claude_failure_does_not_block_codex_when_both_are_enabled() {
-        let data = poll_with(
-            true,
-            true,
-            false,
-            || Err(PollError::AuthRequired),
-            || Ok(usage_with_session_percent(42.0)),
-            || unreachable!("antigravity is disabled"),
-        )
+        let data = poll_with(&[ProviderId::ClaudeCode, ProviderId::Codex], |provider| {
+            match provider {
+                ProviderId::ClaudeCode => Err(PollError::AuthRequired),
+                ProviderId::Codex => Ok(usage_with_session_percent(42.0)),
+                ProviderId::Antigravity => unreachable!("antigravity is disabled"),
+            }
+        })
         .expect("codex data should keep the poll successful");
 
-        assert!(data.claude_code.is_none());
-        assert_eq!(data.codex.unwrap().session.percentage, 42.0);
+        assert!(data.get(ProviderId::ClaudeCode).is_none());
+        assert_eq!(
+            data.get(ProviderId::Codex).unwrap().session.percentage,
+            42.0
+        );
     }
 
     #[test]
     fn codex_failure_does_not_block_claude_when_both_are_enabled() {
-        let data = poll_with(
-            true,
-            true,
-            false,
-            || Ok(usage_with_session_percent(64.0)),
-            || Err(PollError::RequestFailed),
-            || unreachable!("antigravity is disabled"),
-        )
+        let data = poll_with(&[ProviderId::ClaudeCode, ProviderId::Codex], |provider| {
+            match provider {
+                ProviderId::ClaudeCode => Ok(usage_with_session_percent(64.0)),
+                ProviderId::Codex => Err(PollError::RequestFailed),
+                ProviderId::Antigravity => unreachable!("antigravity is disabled"),
+            }
+        })
         .expect("claude data should keep the poll successful");
 
-        assert_eq!(data.claude_code.unwrap().session.percentage, 64.0);
-        assert!(data.codex.is_none());
+        assert_eq!(
+            data.get(ProviderId::ClaudeCode).unwrap().session.percentage,
+            64.0
+        );
+        assert!(data.get(ProviderId::Codex).is_none());
     }
 
     #[test]
     fn returns_first_error_when_no_enabled_provider_succeeds() {
-        let error = poll_with(
-            true,
-            true,
-            true,
-            || Err(PollError::AuthRequired),
-            || Err(PollError::RequestFailed),
-            || Err(PollError::NoCredentials),
-        )
+        let error = poll_with(&crate::providers::PROVIDERS, |provider| match provider {
+            ProviderId::ClaudeCode => Err(PollError::AuthRequired),
+            ProviderId::Codex => Err(PollError::RequestFailed),
+            ProviderId::Antigravity => Err(PollError::NoCredentials),
+        })
         .expect_err("all-provider failure should return an error");
 
         assert_eq!(error, PollError::AuthRequired);
@@ -1963,18 +2074,165 @@ mod tests {
 
     #[test]
     fn antigravity_failure_does_not_block_codex_when_both_are_enabled() {
-        let data = poll_with(
-            false,
-            true,
-            true,
-            || unreachable!("claude code is disabled"),
-            || Ok(usage_with_session_percent(42.0)),
-            || Err(PollError::NoCredentials),
-        )
+        let data = poll_with(&[ProviderId::Codex, ProviderId::Antigravity], |provider| {
+            match provider {
+                ProviderId::ClaudeCode => unreachable!("claude code is disabled"),
+                ProviderId::Codex => Ok(usage_with_session_percent(42.0)),
+                ProviderId::Antigravity => Err(PollError::NoCredentials),
+            }
+        })
         .expect("codex data should keep the poll successful");
 
-        assert!(data.antigravity.is_none());
-        assert_eq!(data.codex.unwrap().session.percentage, 42.0);
+        assert!(data.get(ProviderId::Antigravity).is_none());
+        assert_eq!(
+            data.get(ProviderId::Codex).unwrap().session.percentage,
+            42.0
+        );
+    }
+
+    #[test]
+    fn codex_maps_a_weekly_window_by_its_length_not_by_its_position() {
+        // The server has been seen delivering the weekly window as
+        // `primary_window` with `secondary_window` empty: position must not
+        // decide which row the value lands on.
+        let response = codex_payload(&codex_window(63.0, 1_800_000_000, 604_800), "null");
+        let usage = codex_usage_from_response(response).expect("the weekly window should map");
+
+        assert_eq!(usage.weekly.percentage, 63.0);
+        assert!(usage.weekly.resets_at.is_some());
+        assert!(usage.session.resets_at.is_none());
+    }
+
+    #[test]
+    fn codex_maps_a_five_hour_window_to_the_session_row() {
+        let response = codex_payload(&codex_window(20.0, 1_800_000_000, 18_000), "null");
+        let usage = codex_usage_from_response(response).expect("the 5h window should map");
+
+        assert_eq!(usage.session.percentage, 20.0);
+        assert!(usage.session.resets_at.is_some());
+        assert!(usage.weekly.resets_at.is_none());
+    }
+
+    #[test]
+    fn codex_keeps_both_windows_when_the_lengths_are_nominal() {
+        let response = codex_payload(
+            &codex_window(20.0, 1_800_000_000, 18_000),
+            &codex_window(80.0, 1_800_100_000, 604_800),
+        );
+        let usage = codex_usage_from_response(response).expect("both windows should map");
+
+        assert_eq!(usage.session.percentage, 20.0);
+        assert_eq!(usage.weekly.percentage, 80.0);
+    }
+
+    #[test]
+    fn codex_tolerates_a_null_reset_at() {
+        let body = r#"{"rate_limit": {"primary_window": {"used_percent": 5.0, "reset_at": null}}}"#;
+        let response: CodexUsageResponse =
+            serde_json::from_str(body).expect("a null reset_at should not fail the response");
+        let usage = codex_usage_from_response(response).expect("the window should still map");
+
+        assert_eq!(usage.session.percentage, 5.0);
+        assert!(usage.session.resets_at.is_none());
+    }
+
+    #[test]
+    fn codex_ignores_a_window_without_a_used_percent() {
+        let body = r#"{"rate_limit": {"primary_window": {"reset_at": 1800000000}}}"#;
+        let response: CodexUsageResponse =
+            serde_json::from_str(body).expect("a missing used_percent should not fail the response");
+
+        assert!(codex_usage_from_response(response).is_none());
+    }
+
+    #[test]
+    fn codex_returns_nothing_when_rate_limit_is_null() {
+        let response: CodexUsageResponse =
+            serde_json::from_str(r#"{"rate_limit": null}"#).expect("payload should parse");
+
+        assert!(codex_usage_from_response(response).is_none());
+    }
+
+    #[test]
+    fn codex_returns_nothing_when_both_windows_are_absent() {
+        assert!(codex_usage_from_response(codex_payload("null", "null")).is_none());
+    }
+
+    #[test]
+    fn codex_treats_a_zero_reset_at_as_no_reset() {
+        let response = codex_payload(&codex_window(7.0, 0, 18_000), "null");
+        let usage = codex_usage_from_response(response).expect("the window should map");
+
+        assert!(usage.session.resets_at.is_none());
+    }
+
+    #[test]
+    fn codex_keeps_the_usable_window_when_the_other_is_unusable() {
+        let body = format!(
+            r#"{{"rate_limit": {{"primary_window": {{"reset_at": 1800000000}}, "secondary_window": {}}}}}"#,
+            codex_window(80.0, 1_800_100_000, 604_800)
+        );
+        let response: CodexUsageResponse =
+            serde_json::from_str(&body).expect("payload should parse");
+        let usage = codex_usage_from_response(response).expect("the weekly window should map");
+
+        assert_eq!(usage.weekly.percentage, 80.0);
+        assert!(usage.session.resets_at.is_none());
+    }
+
+    #[test]
+    fn codex_ignores_a_second_window_that_lands_on_the_same_row() {
+        // Both keys carry a weekly window: the first one wins, and the second
+        // must not overwrite it.
+        let response = codex_payload(
+            &codex_window(40.0, 1_800_000_000, 604_800),
+            &codex_window(90.0, 1_800_100_000, 604_800),
+        );
+        let usage = codex_usage_from_response(response).expect("a weekly window should map");
+
+        assert_eq!(usage.weekly.percentage, 40.0);
+        assert!(usage.session.resets_at.is_none());
+    }
+
+    #[test]
+    fn codex_falls_back_to_the_key_when_the_length_is_missing() {
+        let body = r#"{"rate_limit": {"primary_window": {"used_percent": 9.0, "reset_at": 1800000000}}}"#;
+        let response: CodexUsageResponse = serde_json::from_str(body).expect("payload should parse");
+        let usage = codex_usage_from_response(response).expect("the legacy shape should still map");
+
+        assert_eq!(usage.session.percentage, 9.0);
+    }
+
+    #[test]
+    fn codex_falls_back_to_the_weekly_key_when_its_length_is_missing() {
+        let body =
+            r#"{"rate_limit": {"secondary_window": {"used_percent": 33.0, "reset_at": 1800000000}}}"#;
+        let response: CodexUsageResponse =
+            serde_json::from_str(body).expect("payload should parse");
+        let usage = codex_usage_from_response(response).expect("the window should map");
+
+        assert_eq!(usage.weekly.percentage, 33.0);
+    }
+
+    #[test]
+    fn a_provider_reported_twice_keeps_the_latest_usage() {
+        let mut data = AppUsageData::default();
+        data.set(ProviderId::Codex, usage_with_session_percent(10.0));
+        data.set(ProviderId::Codex, usage_with_session_percent(20.0));
+
+        assert_eq!(data.iter().count(), 1, "one provider, one entry");
+        assert_eq!(
+            data.get(ProviderId::Codex).unwrap().session.percentage,
+            20.0
+        );
+    }
+
+    #[test]
+    fn codex_treats_an_unfamiliar_long_window_as_weekly() {
+        let response = codex_payload(&codex_window(30.0, 1_800_000_000, 2_592_000), "null");
+        let usage = codex_usage_from_response(response).expect("the monthly window should map");
+
+        assert_eq!(usage.weekly.percentage, 30.0);
     }
 
     #[test]

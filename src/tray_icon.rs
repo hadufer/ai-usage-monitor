@@ -8,7 +8,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::native_interop::{self, Color, WM_APP_TRAY};
+use crate::cockpit;
+use crate::native_interop::WM_APP_TRAY;
 
 const CLAUDE_TRAY_ICON_ID: u32 = 1;
 const CODEX_TRAY_ICON_ID: u32 = 2;
@@ -31,18 +32,12 @@ pub enum TrayIconKind {
     Antigravity,
 }
 
-/// Badge fill and the ink that stays readable on it.
-#[derive(Clone, Copy)]
-pub struct BadgeColors {
-    pub fill: Color,
-    pub ink: Color,
-}
-
 pub struct TrayIconData {
     pub kind: TrayIconKind,
-    pub percent: Option<f64>,
-    /// `None` keeps the built-in percentage-based colouring.
-    pub colors: Option<BadgeColors>,
+    /// The 5-hour readout; `None` before the first answer, or when the
+    /// provider could not be read.
+    pub badge: Option<cockpit::Badge>,
+    pub palette: cockpit::Palette,
     pub tooltip: String,
 }
 
@@ -54,127 +49,43 @@ impl TrayIconKind {
             Self::Antigravity => ANTIGRAVITY_TRAY_ICON_ID,
         }
     }
-}
 
-fn lerp_channel(start: u8, end: u8, t: f64) -> u8 {
-    (start as f64 + (end as f64 - start as f64) * t.clamp(0.0, 1.0)).round() as u8
-}
-
-fn lerp_color(start: Color, end: Color, t: f64) -> Color {
-    Color::new(
-        lerp_channel(start.r, end.r, t),
-        lerp_channel(start.g, end.g, t),
-        lerp_channel(start.b, end.b, t),
-    )
-}
-
-fn interpolated_fill(percent: f64) -> Color {
-    if percent <= 50.0 {
-        return Color::from_hex("#D97757");
-    }
-
-    let stops = [
-        (50.0, Color::from_hex("#D97757")),
-        (70.0, Color::from_hex("#D08540")),
-        (85.0, Color::from_hex("#CC8C20")),
-        (95.0, Color::from_hex("#C45020")),
-        (100.0, Color::from_hex("#B82020")),
-    ];
-
-    for pair in stops.windows(2) {
-        let (start_pct, start_color) = pair[0];
-        let (end_pct, end_color) = pair[1];
-        if percent <= end_pct {
-            let span = (end_pct - start_pct).max(f64::EPSILON);
-            let t = (percent - start_pct) / span;
-            return lerp_color(start_color, end_color, t);
+    /// What the badge says while there is no number yet: the provider's code,
+    /// the same one its widget row carries.
+    fn code(self) -> &'static str {
+        match self {
+            Self::Claude => "CL",
+            Self::Codex => "CX",
+            Self::Antigravity => "AG",
         }
     }
-
-    stops[stops.len() - 1].1
 }
 
-fn codex_fill(percent: f64) -> Color {
-    if percent >= 90.0 {
-        Color::from_hex("#FFFFFF")
-    } else {
-        Color::from_hex("#111111")
-    }
-}
-
-fn antigravity_fill(percent: f64) -> Color {
-    if percent >= 90.0 {
-        Color::from_hex("#FFFFFF")
-    } else {
-        Color::from_hex("#4285F4")
-    }
-}
-
-/// Create a rounded-rectangle tray icon badge showing the usage percentage.
-/// For Claude, `percent` = None uses the embedded app icon as the loading state.
-/// For Codex and Antigravity, `percent` = None uses a provider placeholder badge.
-pub fn create_icon(
-    kind: TrayIconKind,
-    percent: Option<f64>,
-    colors: Option<BadgeColors>,
-) -> HICON {
-    if matches!(kind, TrayIconKind::Claude) && percent.is_none() {
-        let app_icon = load_embedded_app_icon();
-        if !app_icon.is_invalid() {
-            return app_icon;
+/// The widget's boxed readout at icon size. Claude keeps the app icon as its
+/// loading state, so the tray still says which app this is before any data.
+pub fn create_icon(icon: &TrayIconData) -> HICON {
+    let placeholder;
+    let badge = match &icon.badge {
+        Some(badge) => badge,
+        None => {
+            if matches!(icon.kind, TrayIconKind::Claude) {
+                let app_icon = load_embedded_app_icon();
+                if !app_icon.is_invalid() {
+                    return app_icon;
+                }
+            }
+            placeholder = cockpit::Badge {
+                text: icon.kind.code().to_string(),
+                band: None,
+                hot: false,
+            };
+            &placeholder
         }
-    }
-
-    let size = 64_i32;
-    let margin = 0_i32;
-    let radius = 2_i32;
-    let outline = if matches!(kind, TrayIconKind::Codex | TrayIconKind::Antigravity) {
-        3_i32
-    } else {
-        0_i32
     };
 
-    let fill = match kind {
-        TrayIconKind::Claude => match colors {
-            Some(colors) => colors.fill,
-            None => interpolated_fill(percent.unwrap_or(0.0)),
-        },
-        TrayIconKind::Codex => codex_fill(percent.unwrap_or(0.0)),
-        TrayIconKind::Antigravity => antigravity_fill(percent.unwrap_or(0.0)),
-    };
-    let text_col = match kind {
-        TrayIconKind::Claude => match colors {
-            Some(colors) => colors.ink,
-            None => Color::from_hex("#FFFFFF"),
-        },
-        TrayIconKind::Codex if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#111111"),
-        TrayIconKind::Codex => Color::from_hex("#FFFFFF"),
-        TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1967D2"),
-        TrayIconKind::Antigravity => Color::from_hex("#FFFFFF"),
-    };
-    let outline_col = match kind {
-        TrayIconKind::Claude => fill,
-        TrayIconKind::Codex if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#111111"),
-        TrayIconKind::Codex => Color::from_hex("#FFFFFF"),
-        TrayIconKind::Antigravity if percent.unwrap_or(0.0) >= 90.0 => Color::from_hex("#1967D2"),
-        TrayIconKind::Antigravity => Color::from_hex("#FFFFFF"),
-    };
-
-    let display_text = match percent {
-        Some(p) => format!("{}", p.round().clamp(0.0, 999.0) as u32),
-        None => match kind {
-            TrayIconKind::Claude => String::new(),
-            TrayIconKind::Codex => "C".to_string(),
-            TrayIconKind::Antigravity => "A".to_string(),
-        },
-    };
-
-    let font_h = match display_text.len() {
-        1 => -50,
-        2 => -42,
-        _ => -30,
-    };
-
+    // Drawn at the size the notification area shows, so the outline lands on
+    // whole pixels instead of being blurred by the shell's downscale.
+    let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
     unsafe {
         let screen_dc = GetDC(HWND::default());
         let mem_dc = CreateCompatibleDC(screen_dc);
@@ -196,101 +107,14 @@ pub fn create_icon(
         let dib =
             CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).unwrap_or_default();
 
-        if dib.is_invalid() {
+        if dib.is_invalid() || bits.is_null() {
             let _ = DeleteDC(mem_dc);
             ReleaseDC(HWND::default(), screen_dc);
             return HICON::default();
         }
 
-        let old_bmp = SelectObject(mem_dc, dib);
-
-        // Zero-fill (transparent background)
-        let pixel_data = std::slice::from_raw_parts_mut(bits as *mut u32, (size * size) as usize);
-        for px in pixel_data.iter_mut() {
-            *px = 0;
-        }
-
-        // Draw rounded rectangle badge
-        let null_pen = GetStockObject(NULL_PEN);
-        let old_pen = SelectObject(mem_dc, null_pen);
-
-        if outline > 0 {
-            let br_outline = CreateSolidBrush(COLORREF(outline_col.to_colorref()));
-            let old_brush = SelectObject(mem_dc, br_outline);
-            let _ = RoundRect(
-                mem_dc,
-                margin,
-                margin,
-                size - margin + 1,
-                size - margin + 1,
-                (radius + 1) * 2,
-                (radius + 1) * 2,
-            );
-            SelectObject(mem_dc, old_brush);
-            let _ = DeleteObject(br_outline);
-        }
-
-        let br_fill = CreateSolidBrush(COLORREF(fill.to_colorref()));
-        let old_brush = SelectObject(mem_dc, br_fill);
-        let _ = RoundRect(
-            mem_dc,
-            margin + outline,
-            margin + outline,
-            size - margin - outline + 1,
-            size - margin - outline + 1,
-            (radius - 1) * 2,
-            (radius - 1) * 2,
-        );
-
-        SelectObject(mem_dc, old_brush);
-        SelectObject(mem_dc, old_pen);
-        let _ = DeleteObject(br_fill);
-
-        // Draw centered percentage text
-        let font_name = native_interop::wide_str("Arial Bold");
-        let font = CreateFontW(
-            font_h,
-            0,
-            0,
-            0,
-            FW_BOLD.0 as i32,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_TT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            ANTIALIASED_QUALITY.0 as u32,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            PCWSTR::from_raw(font_name.as_ptr()),
-        );
-        let old_font = SelectObject(mem_dc, font);
-        let _ = SetBkMode(mem_dc, TRANSPARENT);
-        let _ = SetTextColor(mem_dc, COLORREF(text_col.to_colorref()));
-
-        let mut text_rect = RECT {
-            left: margin,
-            top: margin,
-            right: size - margin,
-            bottom: size - margin,
-        };
-        let mut text_wide: Vec<u16> = display_text.encode_utf16().collect();
-        let _ = DrawTextW(
-            mem_dc,
-            &mut text_wide,
-            &mut text_rect,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-        );
-
-        SelectObject(mem_dc, old_font);
-        let _ = DeleteObject(font);
-
-        // Set alpha: non-zero BGR pixel -> fully opaque; background stays transparent
-        for px in pixel_data.iter_mut() {
-            if *px != 0 {
-                *px = (*px & 0x00FF_FFFF) | 0xFF00_0000;
-            }
-        }
+        std::slice::from_raw_parts_mut(bits as *mut u32, (size * size) as usize).fill(0);
+        cockpit::paint_badge(bits, size, badge, &icon.palette);
 
         // Monochrome mask (per-pixel alpha from colour bitmap)
         let mask_bytes = vec![0u8; ((size * size + 7) / 8) as usize];
@@ -312,7 +136,6 @@ pub fn create_icon(
         let hicon = CreateIconIndirect(&icon_info).unwrap_or_default();
 
         let _ = DeleteObject(mask_bmp);
-        SelectObject(mem_dc, old_bmp);
         let _ = DeleteObject(dib);
         let _ = DeleteDC(mem_dc);
         ReleaseDC(HWND::default(), screen_dc);
@@ -320,7 +143,6 @@ pub fn create_icon(
         hicon
     }
 }
-
 fn load_embedded_app_icon() -> HICON {
     unsafe {
         let mut exe_buf = [0u16; 260];
@@ -379,23 +201,17 @@ fn copy_wide_256(s: &str, buf: &mut [u16; 256]) {
 }
 
 /// Register the tray icon with the shell.
-pub fn add(
-    hwnd: HWND,
-    kind: TrayIconKind,
-    percent: Option<f64>,
-    colors: Option<BadgeColors>,
-    tooltip: &str,
-) {
-    let hicon = create_icon(kind, percent, colors);
+pub fn add(hwnd: HWND, icon: &TrayIconData) {
+    let hicon = create_icon(icon);
     unsafe {
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
-        nid.uID = kind.id();
+        nid.uID = icon.kind.id();
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_APP_TRAY;
         nid.hIcon = hicon;
-        copy_to_tip(tooltip, &mut nid.szTip);
+        copy_to_tip(&icon.tooltip, &mut nid.szTip);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
         if !hicon.is_invalid() {
             let _ = DestroyIcon(hicon);
@@ -403,23 +219,17 @@ pub fn add(
     }
 }
 
-/// Update the tray icon colour and tooltip to reflect current usage.
-pub fn update(
-    hwnd: HWND,
-    kind: TrayIconKind,
-    percent: Option<f64>,
-    colors: Option<BadgeColors>,
-    tooltip: &str,
-) {
-    let hicon = create_icon(kind, percent, colors);
+/// Update the tray icon and its tooltip to reflect current usage.
+pub fn update(hwnd: HWND, icon: &TrayIconData) {
+    let hicon = create_icon(icon);
     unsafe {
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
-        nid.uID = kind.id();
+        nid.uID = icon.kind.id();
         nid.uFlags = NIF_ICON | NIF_TIP;
         nid.hIcon = hicon;
-        copy_to_tip(tooltip, &mut nid.szTip);
+        copy_to_tip(&icon.tooltip, &mut nid.szTip);
         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
         if !hicon.is_invalid() {
             let _ = DestroyIcon(hicon);
@@ -439,38 +249,16 @@ pub fn remove(hwnd: HWND, kind: TrayIconKind) {
 }
 
 pub fn sync(hwnd: HWND, icons: &[TrayIconData]) {
-    let show_claude = icons
-        .iter()
-        .find(|icon| matches!(icon.kind, TrayIconKind::Claude));
-    let show_codex = icons
-        .iter()
-        .find(|icon| matches!(icon.kind, TrayIconKind::Codex));
-    let show_antigravity = icons
-        .iter()
-        .find(|icon| matches!(icon.kind, TrayIconKind::Antigravity));
-
-    if let Some(icon) = show_claude {
-        add(hwnd, icon.kind, icon.percent, icon.colors, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, icon.colors, &icon.tooltip);
-    } else {
-        remove(hwnd, TrayIconKind::Claude);
-    }
-
-    if let Some(icon) = show_codex {
-        add(hwnd, icon.kind, icon.percent, icon.colors, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, icon.colors, &icon.tooltip);
-    } else {
-        remove(hwnd, TrayIconKind::Codex);
-    }
-
-    if let Some(icon) = show_antigravity {
-        add(hwnd, icon.kind, icon.percent, icon.colors, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, icon.colors, &icon.tooltip);
-    } else {
-        remove(hwnd, TrayIconKind::Antigravity);
+    for kind in [TrayIconKind::Claude, TrayIconKind::Codex, TrayIconKind::Antigravity] {
+        match icons.iter().find(|icon| icon.kind.id() == kind.id()) {
+            Some(icon) => {
+                add(hwnd, icon);
+                update(hwnd, icon);
+            }
+            None => remove(hwnd, kind),
+        }
     }
 }
-
 pub fn remove_all(hwnd: HWND) {
     remove(hwnd, TrayIconKind::Claude);
     remove(hwnd, TrayIconKind::Codex);

@@ -1,11 +1,14 @@
 #![windows_subsystem = "windows"]
 
+mod cockpit;
 mod diagnose;
+mod flyout;
 mod localization;
 mod models;
 mod native_interop;
 mod pace;
 mod poller;
+mod providers;
 mod theme;
 mod tray_icon;
 mod updater;

@@ -1,0 +1,639 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-28T14:07:05Z",
+  "title": "Design System: Claude Code Usage Monitor",
+  "extensions": {
+    "platform": "Native Win32 (Rust, GDI+). The product has no CSS: tokens are Rust constants in src/cockpit.rs, src/pace.rs, src/window.rs and src/flyout.rs. The component snippets below are CSS approximations of the painter in the night palette; the day palette maps role for role. Sizes are logical px at 96 DPI, multiplied by the monitor scale.",
+    "colorMeta": {
+      "pace-on-track": {
+        "role": "primary",
+        "displayName": "Runway Green",
+        "canonical": "#3F9142",
+        "oklch": "oklch(58.7% 0.140 144.2)",
+        "source": "src/pace.rs DEFAULT_COLOR_*",
+        "tonalRamp": [
+          "#001001",
+          "#012F05",
+          "#03510E",
+          "#1F7425",
+          "#469748",
+          "#6ABB6A",
+          "#8EE18E",
+          "#CBFFCA"
+        ]
+      },
+      "pace-at-risk": {
+        "role": "primary",
+        "displayName": "Caution Amber",
+        "canonical": "#E8A33C",
+        "oklch": "oklch(76.5% 0.140 73.1)",
+        "source": "src/pace.rs DEFAULT_COLOR_*",
+        "tonalRamp": [
+          "#130900",
+          "#352000",
+          "#5B3A01",
+          "#845604",
+          "#AF740A",
+          "#D9952A",
+          "#FDBB5E",
+          "#FEEBD4"
+        ]
+      },
+      "pace-over": {
+        "role": "primary",
+        "displayName": "Brick Warning Red",
+        "canonical": "#C4402F",
+        "oklch": "oklch(55.8% 0.171 30.5)",
+        "source": "src/pace.rs DEFAULT_COLOR_*",
+        "tonalRamp": [
+          "#1F0000",
+          "#4B0401",
+          "#7E0D02",
+          "#AD291A",
+          "#D5503E",
+          "#FE7560",
+          "#FDB4A7",
+          "#FFE9E5"
+        ]
+      },
+      "night-bug": {
+        "role": "secondary",
+        "displayName": "Bug Magenta",
+        "canonical": "#D86BD3",
+        "oklch": "oklch(69.2% 0.185 329.1)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#190019",
+          "#410240",
+          "#6D076C",
+          "#962A93",
+          "#BC50B7",
+          "#E274DD",
+          "#FFA4F9",
+          "#FEE6FC"
+        ]
+      },
+      "day-bug": {
+        "role": "secondary",
+        "displayName": "Deep Bug Magenta",
+        "canonical": "#A8309F",
+        "oklch": "oklch(53.2% 0.198 331.2)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#190018",
+          "#42013E",
+          "#70026A",
+          "#9B2193",
+          "#C14AB7",
+          "#E86FDD",
+          "#FDA7F2",
+          "#FFE6FA"
+        ]
+      },
+      "night-over-text": {
+        "role": "tertiary",
+        "displayName": "Night Over Text",
+        "canonical": "#D37063",
+        "oklch": "oklch(65.5% 0.127 28.8)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#1F0000",
+          "#4C0302",
+          "#771C15",
+          "#9C3F35",
+          "#C36155",
+          "#EA8477",
+          "#FEB4A8",
+          "#FFE9E5"
+        ],
+        "note": "Derived from the user's pace fill by Palette::new's mix(); recomputed when fills are customised."
+      },
+      "day-at-risk-text": {
+        "role": "tertiary",
+        "displayName": "Day Amber Text",
+        "canonical": "#976A27",
+        "oklch": "oklch(55.9% 0.100 73.5)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#130900",
+          "#352002",
+          "#5A3B05",
+          "#83570C",
+          "#A67837",
+          "#CB9B5B",
+          "#F1BF7E",
+          "#FEEBD3"
+        ],
+        "note": "Derived from the user's pace fill by Palette::new's mix(); recomputed when fills are customised."
+      },
+      "day-over-text": {
+        "role": "tertiary",
+        "displayName": "Day Over Text",
+        "canonical": "#AC3829",
+        "oklch": "oklch(50.8% 0.154 30.5)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#1F0000",
+          "#4B0401",
+          "#7E0D03",
+          "#A73325",
+          "#CE5846",
+          "#F67B68",
+          "#FDB4A7",
+          "#FFE9E5"
+        ],
+        "note": "Derived from the user's pace fill by Palette::new's mix(); recomputed when fills are customised."
+      },
+      "hot-ink": {
+        "role": "tertiary",
+        "displayName": "Hot Ink",
+        "canonical": "#FFFFFF",
+        "oklch": "oklch(100.0% 0.000 89.9)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ],
+        "note": "Palette::hot_ink: #111111 instead when the user's red is light (BT.601 luma > 150)."
+      },
+      "night-plate": {
+        "role": "neutral",
+        "displayName": "Black Glass",
+        "canonical": "#0A0C0F",
+        "oklch": "oklch(15.3% 0.007 258.4)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#090B0E",
+          "#232529",
+          "#404246",
+          "#5F6165",
+          "#808287",
+          "#A2A5AA",
+          "#C6C9CE",
+          "#EBEFF3"
+        ]
+      },
+      "night-hover": {
+        "role": "neutral",
+        "displayName": "Lit Glass (night)",
+        "canonical": "#16191D",
+        "oklch": "oklch(21.2% 0.009 255.6)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#090B0F",
+          "#22252A",
+          "#3F4247",
+          "#5E6266",
+          "#7F8388",
+          "#A1A5AB",
+          "#C5C9CF",
+          "#EAEFF5"
+        ]
+      },
+      "night-track": {
+        "role": "neutral",
+        "displayName": "Unlit Tape (night)",
+        "canonical": "#22262B",
+        "oklch": "oklch(26.7% 0.011 254.0)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#080B10",
+          "#21252A",
+          "#3E4248",
+          "#5D6268",
+          "#7E8389",
+          "#A0A6AC",
+          "#C4CAD0",
+          "#EAEFF6"
+        ]
+      },
+      "night-rule": {
+        "role": "neutral",
+        "displayName": "Panel Rule (night)",
+        "canonical": "#22262B",
+        "oklch": "oklch(26.7% 0.011 254.0)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#080B10",
+          "#21252A",
+          "#3E4248",
+          "#5D6268",
+          "#7E8389",
+          "#A0A6AC",
+          "#C4CAD0",
+          "#EAEFF6"
+        ]
+      },
+      "night-bezel": {
+        "role": "neutral",
+        "displayName": "Bezel (night)",
+        "canonical": "#2A2E33",
+        "oklch": "oklch(29.9% 0.011 254.0)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#080B10",
+          "#22252A",
+          "#3E4248",
+          "#5D6267",
+          "#7E8389",
+          "#A1A5AC",
+          "#C4CAD0",
+          "#EAEFF6"
+        ]
+      },
+      "night-box-line": {
+        "role": "neutral",
+        "displayName": "Readout Frame (night)",
+        "canonical": "#454B52",
+        "oklch": "oklch(41.0% 0.014 252.2)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#070C11",
+          "#20262C",
+          "#3D4349",
+          "#5C6269",
+          "#7C838B",
+          "#9FA6AE",
+          "#C3CAD2",
+          "#E8EFF8"
+        ]
+      },
+      "night-dim": {
+        "role": "neutral",
+        "displayName": "Legend Grey (night)",
+        "canonical": "#8B929A",
+        "oklch": "oklch(65.7% 0.014 251.6)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#070C11",
+          "#20262C",
+          "#3D434A",
+          "#5B6269",
+          "#7C838B",
+          "#9FA6AE",
+          "#C3CAD2",
+          "#E8EFF8"
+        ]
+      },
+      "night-ink": {
+        "role": "neutral",
+        "displayName": "Instrument Ink (night)",
+        "canonical": "#E8EAED",
+        "oklch": "oklch(93.6% 0.005 258.3)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#0A0B0D",
+          "#242527",
+          "#404244",
+          "#606164",
+          "#818285",
+          "#A3A5A8",
+          "#C7C9CC",
+          "#EDEFF2"
+        ]
+      },
+      "day-plate": {
+        "role": "neutral",
+        "displayName": "Lit Plate",
+        "canonical": "#FBFBFA",
+        "oklch": "oklch(98.8% 0.001 106.4)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252524",
+          "#424241",
+          "#616160",
+          "#828281",
+          "#A5A5A4",
+          "#C9C9C8",
+          "#EEEEED"
+        ]
+      },
+      "day-hover": {
+        "role": "neutral",
+        "displayName": "Lit Glass (day)",
+        "canonical": "#EEF0F2",
+        "oklch": "oklch(95.4% 0.003 247.9)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#0A0B0D",
+          "#242527",
+          "#414244",
+          "#606163",
+          "#818284",
+          "#A3A5A7",
+          "#C7C9CB",
+          "#EDEFF1"
+        ]
+      },
+      "day-track": {
+        "role": "neutral",
+        "displayName": "Unlit Tape (day)",
+        "canonical": "#DCDFE3",
+        "oklch": "oklch(90.2% 0.006 255.5)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#090B0E",
+          "#232528",
+          "#404245",
+          "#5F6165",
+          "#808286",
+          "#A2A5A9",
+          "#C6C9CD",
+          "#ECEFF3"
+        ]
+      },
+      "day-rule": {
+        "role": "neutral",
+        "displayName": "Panel Rule (day)",
+        "canonical": "#E1E4E8",
+        "oklch": "oklch(91.8% 0.006 255.5)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#090B0E",
+          "#232528",
+          "#404245",
+          "#5F6165",
+          "#808286",
+          "#A2A5A9",
+          "#C6C9CD",
+          "#ECEFF3"
+        ]
+      },
+      "day-bezel": {
+        "role": "neutral",
+        "displayName": "Bezel (day)",
+        "canonical": "#C4C8CD",
+        "oklch": "oklch(83.1% 0.008 253.9)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#090B0F",
+          "#222529",
+          "#3F4246",
+          "#5E6266",
+          "#7F8387",
+          "#A1A5AA",
+          "#C5C9CE",
+          "#EBEFF4"
+        ]
+      },
+      "day-box-line": {
+        "role": "neutral",
+        "displayName": "Readout Frame (day)",
+        "canonical": "#9AA0A6",
+        "oklch": "oklch(70.3% 0.011 248.0)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#080C10",
+          "#21262A",
+          "#3D4348",
+          "#5C6267",
+          "#7D8389",
+          "#A0A6AC",
+          "#C4CAD0",
+          "#E9EFF6"
+        ]
+      },
+      "day-dim": {
+        "role": "neutral",
+        "displayName": "Legend Grey (day)",
+        "canonical": "#5A6169",
+        "oklch": "oklch(48.9% 0.016 251.7)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#070C12",
+          "#20262D",
+          "#3C434A",
+          "#5B626A",
+          "#7C838C",
+          "#9EA6AF",
+          "#C2CAD3",
+          "#E7EFF9"
+        ]
+      },
+      "day-ink": {
+        "role": "neutral",
+        "displayName": "Instrument Ink (day)",
+        "canonical": "#1B1F24",
+        "oklch": "oklch(23.7% 0.011 254.1)",
+        "source": "src/cockpit.rs Palette::new",
+        "tonalRamp": [
+          "#080B10",
+          "#21252B",
+          "#3E4248",
+          "#5D6268",
+          "#7E8389",
+          "#A0A6AC",
+          "#C4CAD1",
+          "#E9EFF6"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "widget-value": {
+        "displayName": "Widget Value",
+        "purpose": "Codes and readout numerals on the plate. 10px when three rows share it (widget_font)."
+      },
+      "widget-countdown": {
+        "displayName": "Widget Countdown",
+        "purpose": "Time to reset on the plate, Legend Grey; column sized to the widest printable countdown."
+      },
+      "flyout-title": {
+        "displayName": "Flyout Title",
+        "purpose": "The panel's name, in capitals and ink; the only step above the labels."
+      },
+      "flyout-label": {
+        "displayName": "Flyout Label",
+        "purpose": "Tracked capitals: updated stamp, group names, causes, column labels, button labels."
+      },
+      "flyout-readout": {
+        "displayName": "Flyout Readout",
+        "purpose": "The boxed number under each vertical tape."
+      },
+      "flyout-alert": {
+        "displayName": "Flyout Alert",
+        "purpose": "Projection lines in capitals, set solid, in the band's text colour."
+      },
+      "flyout-reset": {
+        "displayName": "Flyout Reset",
+        "purpose": "Exact local reset time in ink (Windows regional format)."
+      },
+      "flyout-countdown": {
+        "displayName": "Flyout Countdown",
+        "purpose": "Detailed countdown under the reset time, Legend Grey."
+      },
+      "flyout-legend": {
+        "displayName": "Legend",
+        "purpose": "The one sentence of prose, keying the bug. Sentence case."
+      }
+    },
+    "shadows": [
+      {
+        "name": "flyout-shell-shadow",
+        "value": "CS_DROPSHADOW window-class shadow + DWMWCP_ROUND corners + DWMWA_BORDER_COLOR = bezel",
+        "purpose": "The flyout's only elevation, borrowed from the shell (src/flyout.rs). The widget carries no shadow."
+      }
+    ],
+    "motion": [
+      {
+        "name": "reset-drain",
+        "value": "250ms, 1 - 2^(-10t) (~cubic-bezier(0.16, 1, 0.3, 1)), 16ms frames",
+        "purpose": "The only motion: a rolled-over window's fill runs from the old value to the new one. Skipped when SPI_GETCLIENTAREAANIMATION is off. DRAIN_DURATION / TIMER_ANIM in src/window.rs."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Widget Plate",
+      "kind": "custom",
+      "refersTo": "plate",
+      "description": "The 40px taskbar plate, one row per provider: code, 5-hour tape with bug and ink pointer, 7-day hairline, boxed readout, countdown. Rest, Hover and Active states.",
+      "html": "<div class=\"ds-plate\" tabindex=\"0\"><div class=\"ds-row\"><span class=\"ds-code\">CL</span><span class=\"ds-tape\"><i class=\"ds-fill\" style=\"width:62%;background:#E8A33C\"></i><b class=\"ds-bug\" style=\"left:56.7%\"></b><span class=\"ds-sub\"><i style=\"width:31%;background:#3F9142\"></i></span></span><span class=\"ds-readout\" style=\"color:#E8A33C;border-color:#E8A33C\">62</span><span class=\"ds-cd\">2h10m</span></div><div class=\"ds-row\"><span class=\"ds-code\">CX</span><span class=\"ds-tape\"><i class=\"ds-fill\" style=\"width:71%;background:#C4402F\"></i><b class=\"ds-bug\" style=\"left:26.7%\"></b><span class=\"ds-sub\"><i style=\"width:12%;background:#3F9142\"></i></span></span><span class=\"ds-readout ds-hot\">71</span><span class=\"ds-cd\">3h40m</span></div></div>",
+      "css": ".ds-plate { display: inline-flex; flex-direction: column; justify-content: center; gap: 3px; height: 40px; padding: 0 7px; background: #0A0C0F; border: 1px solid #2A2E33; border-radius: 4px; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 12px; cursor: default; } .ds-plate:hover { background: #16191D; border-color: #454B52; } .ds-plate:active, .ds-plate:focus-visible { background: #16191D; border-color: #8B929A; outline: none; } .ds-row { display: flex; align-items: center; height: 15px; } .ds-code { color: #8B929A; width: 16px; margin-right: 5px; } .ds-tape { position: relative; width: 62px; height: 5px; margin: 4px 6px 3px 0; background: #22262B; } .ds-tape::after { content: ''; position: absolute; inset: 0; background: linear-gradient(#0A0C0F,#0A0C0F) 25% 0/1px 100% no-repeat, linear-gradient(#0A0C0F,#0A0C0F) 50% 0/1px 100% no-repeat, linear-gradient(#0A0C0F,#0A0C0F) 75% 0/1px 100% no-repeat; } .ds-fill { position: absolute; left: 0; top: 0; bottom: 0; box-sizing: border-box; border-right: 1px solid #E8EAED; } .ds-bug { position: absolute; top: -4px; width: 0; height: 0; margin-left: -3px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid #D86BD3; z-index: 1; } .ds-sub { position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: #22262B; } .ds-sub i { display: block; height: 2px; } .ds-readout { box-sizing: border-box; min-width: 26px; height: 15px; line-height: 13px; padding: 0 3px; text-align: right; color: #E8EAED; border: 1px solid #454B52; border-radius: 2px; margin-right: 4px; } .ds-hot { background: #C4402F; border-color: #C4402F; color: #FFFFFF; } .ds-cd { font-family: \"Bahnschrift SemiCondensed\", Bahnschrift, \"Segoe UI\", sans-serif; font-weight: 400; font-stretch: semi-condensed; color: #8B929A; }"
+    },
+    {
+      "name": "Boxed Readout",
+      "kind": "custom",
+      "refersTo": "readout",
+      "description": "The system's unit: a bare number in a 1px frame. Neutral and on-track stay ink; at-risk and over take band text and frame; only the hottest red is reversed; unreported reads --.",
+      "html": "<div class=\"ds-readouts\"><span class=\"ds-rd\">18</span><span class=\"ds-rd ds-rd-amber\">62</span><span class=\"ds-rd ds-rd-red\">88</span><span class=\"ds-rd ds-rd-hot\">71</span><span class=\"ds-rd\">--</span></div>",
+      "css": ".ds-readouts { display: flex; gap: 8px; padding: 10px; background: #0A0C0F; } .ds-rd { box-sizing: border-box; min-width: 36px; height: 18px; line-height: 16px; padding: 0 5px; text-align: center; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 14px; color: #E8EAED; border: 1px solid #454B52; border-radius: 2px; } .ds-rd-amber { color: #E8A33C; border-color: #E8A33C; } .ds-rd-red { color: #D37063; border-color: #D37063; } .ds-rd-hot { background: #C4402F; border-color: #C4402F; color: #FFFFFF; }"
+    },
+    {
+      "name": "Flyout Button",
+      "kind": "button",
+      "refersTo": "flyout-button",
+      "description": "Refresh and Settings: tracked 11px capitals in a 1px frame. Hover lights the glass, press drops to track, keyboard focus draws an ink ring 3px out.",
+      "html": "<div class=\"ds-btns\"><button class=\"ds-btn\">REFRESH</button><button class=\"ds-btn\">SETTINGS</button></div>",
+      "css": ".ds-btns { display: flex; gap: 8px; padding: 12px 16px; background: #0A0C0F; } .ds-btn { height: 26px; padding: 0 10px; background: transparent; color: #E8EAED; border: 1px solid #454B52; border-radius: 2px; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 11px; letter-spacing: 0.08em; cursor: default; } .ds-btn:hover { background: #16191D; border-color: #8B929A; } .ds-btn:active { background: #22262B; } .ds-btn:focus-visible { outline: 1px solid #E8EAED; outline-offset: 3px; }"
+    },
+    {
+      "name": "Vertical Tape Column",
+      "kind": "custom",
+      "refersTo": "vertical-tape",
+      "description": "One flyout window: tracked label, 10x92 tape filled from the bottom with an ink pointer, quarter ticks at left (long at 0/50/100), magenta bug pointing in from the right, boxed readout, exact reset in ink, countdown in grey.",
+      "html": "<div class=\"ds-col\"><div class=\"ds-col-label\">5H</div><div class=\"ds-vtape\"><i class=\"ds-vfill\" style=\"height:62%;background:#E8A33C\"></i><b class=\"ds-vbug\" style=\"bottom:56.7%\"></b></div><div class=\"ds-col-rd\">62</div><div class=\"ds-col-reset\">16:42</div><div class=\"ds-col-cd\">2h10m</div></div>",
+      "css": ".ds-col { display: inline-flex; flex-direction: column; align-items: center; width: 64px; padding: 12px 0; background: #0A0C0F; } .ds-col-label { height: 12px; line-height: 12px; margin-bottom: 6px; color: #8B929A; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 11px; letter-spacing: 0.08em; } .ds-vtape { position: relative; width: 10px; height: 92px; margin-bottom: 8px; background: #22262B; } .ds-vtape::before { content: ''; position: absolute; right: 12px; top: 0; bottom: 0; width: 7px; background: linear-gradient(#454B52,#454B52) 0 0/7px 1px no-repeat, linear-gradient(#454B52,#454B52) 2px 25%/5px 1px no-repeat, linear-gradient(#454B52,#454B52) 0 50%/7px 1px no-repeat, linear-gradient(#454B52,#454B52) 2px 75%/5px 1px no-repeat, linear-gradient(#454B52,#454B52) 0 100%/7px 1px no-repeat; } .ds-vfill { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; border-top: 1px solid #E8EAED; } .ds-vbug { position: absolute; left: 11px; width: 0; height: 0; margin-bottom: -4px; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-right: 6px solid #D86BD3; } .ds-col-rd { box-sizing: border-box; min-width: 36px; height: 18px; line-height: 16px; margin-bottom: 5px; text-align: center; color: #E8A33C; border: 1px solid #E8A33C; border-radius: 2px; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 14px; } .ds-col-reset { font-family: \"Bahnschrift SemiCondensed\", Bahnschrift, \"Segoe UI\", sans-serif; font-weight: 400; font-stretch: semi-condensed; font-size: 12px; color: #E8EAED; line-height: 14px; margin-bottom: 2px; } .ds-col-cd { font-family: \"Bahnschrift SemiCondensed\", Bahnschrift, \"Segoe UI\", sans-serif; font-weight: 400; font-stretch: semi-condensed; font-size: 11px; color: #8B929A; line-height: 13px; }"
+    },
+    {
+      "name": "Alert Frame",
+      "kind": "card",
+      "refersTo": "flyout",
+      "description": "Projections, soonest first, at most three: who, then the line, both in the band's text colour, in a 1px rule-coloured frame with a 3px radius. Shown only when a limit lands before its reset.",
+      "html": "<div class=\"ds-alerts\"><div class=\"ds-alert\" style=\"color:#D37063\"><span>CODEX 5H</span>LIMIT IN ~33m AT THIS PACE</div><div class=\"ds-alert\" style=\"color:#E8A33C\"><span>CLAUDE 5H</span>LIMIT IN ~1h44m AT THIS PACE</div></div>",
+      "css": ".ds-alerts { box-sizing: border-box; width: 360px; padding: 8px 10px; background: #0A0C0F; border: 1px solid #22262B; border-radius: 3px; } .ds-alert { height: 18px; line-height: 18px; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 12px; } .ds-alert span { display: inline-block; width: 72px; margin-right: 14px; }"
+    },
+    {
+      "name": "Failed Provider Label",
+      "kind": "custom",
+      "refersTo": "flyout",
+      "description": "A provider that could not be read: the group name struck through in Legend Grey, the cause in words in ink at right. A mark and a word, never red.",
+      "html": "<div class=\"ds-group-head\"><s class=\"ds-struck\">ANTIGRAVITY</s><span class=\"ds-cause\">SIGN IN AGAIN</span></div>",
+      "css": ".ds-group-head { display: flex; justify-content: space-between; gap: 12px; width: 220px; height: 12px; line-height: 12px; padding: 12px 16px 7px; background: #0A0C0F; border-bottom: 1px solid #22262B; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 11px; letter-spacing: 0.08em; } .ds-struck { color: #8B929A; text-decoration: line-through; text-decoration-thickness: 1px; } .ds-cause { color: #E8EAED; }"
+    },
+    {
+      "name": "Tray Badge",
+      "kind": "custom",
+      "refersTo": "tray-badge",
+      "description": "The 5-hour readout at icon size (shown here at 2x): plate ground, outline in Legend Grey (band text when at risk or over), the hottest red reversed. Before data, the provider code.",
+      "html": "<div class=\"ds-badges\"><span class=\"ds-badge\">18</span><span class=\"ds-badge\" style=\"color:#E8A33C;border-color:#E8A33C\">62</span><span class=\"ds-badge ds-badge-hot\">71</span><span class=\"ds-badge\">CX</span></div>",
+      "css": ".ds-badges { display: flex; gap: 12px; padding: 12px; background: #1C1C1C; } .ds-badge { box-sizing: border-box; width: 32px; height: 32px; line-height: 28px; text-align: center; background: #0A0C0F; color: #E8EAED; border: 2px solid #8B929A; border-radius: 4px; font-family: \"Bahnschrift SemiBold SemiConden\", Bahnschrift, \"Segoe UI Semibold\", sans-serif; font-weight: 600; font-stretch: semi-condensed; font-size: 22px; } .ds-badge-hot { background: #C4402F; border-color: #C4402F; color: #FFFFFF; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Glass Cockpit",
+    "overview": "The monitor is drawn as one instrument panel in the manner of an EICAS engine display: a black glass plate set into the taskbar (a pale plate when the taskbar is light), with an engine tape for every usage window. The fill shows what has been spent. A magenta bug shows where the clock says you should be. The gap between the two is the pace, so the reading is geometric: fill divided by bug is the pace, exactly, because the bug sits at the same clamped elapsed fraction that `pace.rs` divides by (`pace::elapsed_fraction`, floor `DEFAULT_MIN_ELAPSED_FRACTION` = 0.1). The direction contract lives in the opening comment of `src/cockpit.rs`, and the confirmed brief in `.impeccable/shape-brief-glass-cockpit.md`.\n\nThe panel is dense and quiet. It sets out to replace the category's usual kit (a text label, a segmented progress bar, a row of percentages) with instrument marks: boxed tabular readouts, one-pixel frames, quarter ticks cut through the tape, and a single pointer. Colour means pace and nothing else. Green, amber and brick red are the three bands. Magenta is the bug. Every other state is said with a mark or a word. Hierarchy in the widget comes from weight, frame and reversal, never from a second type size. The whole system is drawn by one GDI+ painter (`cockpit::Painter`) into per-pixel-alpha bitmaps, so the widget, the click-open flyout and the tray badges are the same instrument at three sizes.\n\nIt belongs to the Windows shell. It uses Bahnschrift, the DIN face Windows has shipped since 10 1709, lights up the way a taskbar button lights up, gets its rounded corners and drop shadow from the shell, follows the system light/dark setting, and has no motion except the one gesture the shell's own \"Show animations\" switch controls. The brief rejects the aviation costume: screws, glows, gradients and drop shadows inside the widget.",
+    "keyCharacteristics": [
+      "One instrument, three surfaces: taskbar widget, click-open flyout, tray badges, all from `src/cockpit.rs`.",
+      "Pace is geometry first (fill against bug) and hue second (band colour).",
+      "Two palettes (night, day), chosen by the Windows theme; the pace fills are user-configurable, and the text variants are derived from them.",
+      "Boxed readouts show bare numbers with no `%` sign; the box is the unit.",
+      "Absence and failure are marks and words, never red.",
+      "The only motion is the reset drain, and it is skipped when Windows animations are off."
+    ],
+    "rules": [
+      {
+        "name": "The One Hot Readout Rule",
+        "body": "On each surface (widget rows, flyout columns, tray icons, each counted separately), only values in the red band compete, and only the one with the highest pace is reversed: a red box with Hot Ink. Other red values get red numerals and a red frame. Amber gets amber numerals and an amber frame. On-track values stay neutral. If nothing is red, nothing is reversed. See `heat_of` and `hottest` in `src/window.rs`.",
+        "section": "colors"
+      },
+      {
+        "name": "The Bug Magenta Rule",
+        "body": "Magenta is reserved for the bug. The footer legend draws the bug itself to key it; nothing else on any surface may be magenta.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Green Rule",
+        "body": "On-track readouts use Instrument Ink, not green (`Palette::text`). Green numerals would add noise to a value that needs no attention, so green lives only in fills.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Size Rule",
+        "body": "Every letter on the widget plate is one size: 12 px, or 10 px when three rows share the plate. It is untracked. Hierarchy comes from weight, frame and reversal. Only the flyout has room for type steps.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tracked Legend Rule",
+        "body": "The flyout's capital legends are letter-spaced +0.08 em (`TRACK`), glyph by glyph, because GDI+ has no letter-spacing option. This applies to Latin, Greek and Cyrillic only (`trackable`: every code point below U+0530). CJK labels fall back through DrawString, which does font fallback where the glyph path cannot, and are set solid, as those scripts normally are.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Scale Rule",
+        "body": "Every tape is one 0–100 scale with quarter ticks. On the widget tape, 1 px cuts in the plate colour at 25, 50 and 75 run through track and fill alike. On the flyout's vertical tape, ticks sit 2 px left of the tape: long (7 px) at 0, 50 and 100, short (5 px) at 25 and 75, in the Readout Frame colour.",
+        "section": "layout"
+      },
+      {
+        "name": "The Sliver Rule",
+        "body": "Any positive use shows at least one pixel of fill (`filled_width`). A sliver of use is never drawn as nothing.",
+        "section": "layout"
+      },
+      {
+        "name": "The Borrowed Depth Rule",
+        "body": "Only the shell lifts anything. Painted surfaces stay flat, and the one floating panel gets its shadow and corners from DWM, so it looks like a Windows flyout and not like an overlay.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Marks, Not Hues Rule",
+        "body": "A non-pace state is never a colour:\n- an unreported window is a hollow tape plus `--`;\n- a provider that could not be read is a struck code (in the widget) or a struck name plus the cause in words (in the flyout).\n\nRed belongs to the pace.",
+        "section": "components"
+      },
+      {
+        "name": "The Ink Pointer Rule",
+        "body": "Every tape carries a 1 px Instrument Ink pointer at its fill end, so the reading never rests on hue alone. This covers the widget's main tape, its 7-day hairline, and each flyout vertical tape. Amber on the pale day track is only about 1.6:1. The test `the_pointer_reads_against_the_track_in_both_themes` requires ink to clear 3:1 against the track in both themes.",
+        "section": "components"
+      },
+      {
+        "name": "The Only Motion Rule",
+        "body": "The reset drain is the only animation. When a window rolls over (its reset jumps more than 30 minutes later and less has been spent), the fill runs from the old value to the new one over 250 ms (`DRAIN_DURATION`). It uses an exponential ease-out, `1 − 2^(−10t)`, at 16 ms frames (`TIMER_ANIM`). It is skipped entirely when Windows \"Show animations\" is off (`SPI_GETCLIENTAREAANIMATION`). The bug moves once a minute and the fill moves on each poll, both without transition.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** draw every new surface through `cockpit::Painter` with the `Palette` roles, in both night and day. Check the night/day pair at 1x and 2x (`cargo test render_previews -- --ignored`).",
+      "**Do** keep the widget to one type size: 12 px, or 10 px at three rows, untracked.",
+      "**Do** track flyout capitals +0.08 em for Latin, Greek and Cyrillic only, and set CJK solid through the DrawString fallback.",
+      "**Do** reverse only the single hottest red readout on each surface, and nothing when no value is red.",
+      "**Do** put a 1 px ink pointer at the end of every tape fill, and keep every tape on the 0–100 scale with quarter ticks.",
+      "**Do** say absence as `--` and a hollow tape, and failure as a struck code or name plus the cause in words.",
+      "**Do** give the plate exactly three states, Rest, Hover and Active, lit the way the shell lights a taskbar button.",
+      "**Do** derive band text colours from the user's fills with the `mix` rules, so custom pace colours stay legible.",
+      "**Do** size columns from the widest string they can print, so nothing reflows as values tick."
+    ],
+    "donts": [
+      "**Don't** use magenta for anything but the bug and its legend key.",
+      "**Don't** use provider brand colours in the widget: Claude's `#D97757` orange collides with Caution Amber. Providers are told apart by their codes.",
+      "**Don't** use red, or any band hue, for a failure, a missing value or an error. Red belongs to the pace.",
+      "**Don't** show an invented `0` for a window nobody reported.",
+      "**Don't** add the aviation costume: decorative bezels beyond the one-pixel rim, screws, glows, gradients or drop shadows inside the widget.",
+      "**Don't** add motion beyond the reset drain, and never animate when Windows animations are off.",
+      "**Don't** colour on-track numerals green, or add a `%` sign inside a readout box.",
+      "**Don't** bring back a hover tooltip on the widget. The flyout, opened by a click, is the detail view."
+    ]
+  }
+}
