@@ -13,7 +13,9 @@
 > All of it is configurable from the settings file. Everything else is
 > upstream's work.
 
-![Screenshot](.github/widget.png)
+<img src=".github/widget.png" width="178" alt="The widget in a dark taskbar: Claude at 62% with 2h10m left, amber because it is ahead of its clock, and Codex at 71% with 3h40m left, red and reversed because it is burning fastest">
+
+<sub>Rendered by the app's own drawing code, with example values.</sub>
 
 A lightweight Windows taskbar widget for people already using Claude Code, with optional Codex and Google Antigravity usage display.
 
@@ -128,6 +130,8 @@ Each badge is the widget's boxed 5-hour value at icon size: outlined in amber or
 Hovering over a tray icon shows the usage values for that model.
 
 ### The Usage Panel
+
+<img src=".github/panel.png" width="392" alt="The usage panel: a vertical tape per window for Claude (5h, 7d, per-model) and Codex (5h, 7d), each with its value, reset time and time left, under two warnings that the Codex and Claude 5-hour limits would be reached before their resets at the current pace">
 
 The widget only has room for a countdown, so a click opens a panel with every
 limit of every provider shown: a tape per window, its value, the wall-clock time

@@ -1664,6 +1664,15 @@ mod tests {
                     paint_flyout(p, &model, &layout, k, Some(0), None, Some(1));
                 });
 
+                // The README's picture: the two providers the widget is best
+                // at, one of them running ahead of its clock.
+                let mut readme = flyout(dark);
+                readme.groups.truncate(2);
+                let layout = flyout_layout(&measure, &readme, k);
+                preview(&format!("flyout-readme-{theme}@{scale}x"), layout.width, layout.height, ground, |p| {
+                    paint_flyout(p, &readme, &layout, k, None, None, None);
+                });
+
                 // Scripts Bahnschrift does not cover must still read: CJK
                 // falls back through DrawString, Cyrillic stays tracked.
                 for (lang, title, updated, buttons, cause) in [
