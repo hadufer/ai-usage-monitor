@@ -33,7 +33,7 @@ use crate::providers::{self, ProviderId};
 use std::ffi::c_void;
 use crate::theme;
 use crate::tray_icon;
-use crate::updater::{self, InstallChannel, ReleaseDescriptor, UpdateCheckResult};
+use crate::updater::{self, ReleaseDescriptor, UpdateCheckResult};
 
 /// Wrapper to make HWND sendable across threads (safe for PostMessage usage)
 #[derive(Clone, Copy)]
@@ -62,7 +62,6 @@ struct AppState {
     embedded: bool,
     language_override: Option<LanguageId>,
     language: LanguageId,
-    install_channel: InstallChannel,
 
     session_text: String,
     weekly_text: String,
@@ -1631,37 +1630,23 @@ fn update_language_change() -> bool {
     true
 }
 
-fn version_action_label(
-    strings: Strings,
-    language: LanguageId,
-    install_channel: InstallChannel,
-    status: &UpdateStatus,
-) -> String {
+fn version_action_label(strings: Strings, status: &UpdateStatus) -> String {
     let current = env!("CARGO_PKG_VERSION");
     match status {
         UpdateStatus::Idle => format!("v{current} - {}", strings.check_for_updates),
         UpdateStatus::Checking => format!("v{current} - {}", strings.checking_for_updates),
         UpdateStatus::Applying => format!("v{current} - {}", strings.applying_update),
         UpdateStatus::UpToDate => format!("v{current} - {}", strings.up_to_date_short),
-        UpdateStatus::Available(release) => match install_channel {
-            InstallChannel::Portable => {
-                format!(
-                    "v{current} - {} v{}",
-                    strings.update_to, release.latest_version
-                )
-            }
-            InstallChannel::Winget => format!(
-                "v{current} - {} v{}",
-                localization::update_via_winget(language),
-                release.latest_version
-            ),
-        },
+        UpdateStatus::Available(release) => format!(
+            "v{current} - {} v{}",
+            strings.update_to, release.latest_version
+        ),
     }
 }
 
 fn begin_update_check(hwnd: HWND, interactive: bool) {
     let send_hwnd = SendHwnd::from_hwnd(hwnd);
-    let (strings, install_channel) = {
+    let strings = {
         let mut state = lock_state();
         let Some(app_state) = state.as_mut() else {
             return;
@@ -1682,7 +1667,7 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
         }
 
         app_state.update_status = UpdateStatus::Checking;
-        (app_state.language.strings(), app_state.install_channel)
+        app_state.language.strings()
     };
 
     std::thread::spawn(move || {
@@ -1722,27 +1707,16 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
 
                 if interactive {
                     if show_update_prompt(hwnd, strings, &release) {
-                        match install_channel {
-                            InstallChannel::Portable => begin_update_apply(hwnd, release),
-                            InstallChannel::Winget => begin_winget_update(hwnd),
-                        }
+                        begin_update_apply(hwnd, release);
                     }
+                } else if auto_install && updater::can_update_in_place() {
+                    diagnose::log(format!(
+                        "auto-installing update {}",
+                        release.latest_version
+                    ));
+                    begin_update_apply(hwnd, release);
                 } else if auto_install {
-                    match install_channel {
-                        // Only portable installs update themselves. A WinGet copy
-                        // is updated through WinGet, which opens a console window
-                        // and has no business appearing unattended.
-                        InstallChannel::Portable => {
-                            diagnose::log(format!(
-                                "auto-installing update {}",
-                                release.latest_version
-                            ));
-                            begin_update_apply(hwnd, release);
-                        }
-                        InstallChannel::Winget => diagnose::log(
-                            "update available; leaving it to WinGet rather than self-updating",
-                        ),
-                    }
+                    diagnose::log("update available; the install folder is not writable");
                 }
                 unsafe {
                     let _ = PostMessageW(hwnd, WM_APP_UPDATE_CHECK_COMPLETE, WPARAM(0), LPARAM(0));
@@ -1816,30 +1790,11 @@ fn begin_update_apply(hwnd: HWND, release: ReleaseDescriptor) {
     });
 }
 
-fn begin_winget_update(hwnd: HWND) {
-    let strings = {
-        let state = lock_state();
-        state.as_ref().map(|s| s.language.strings())
-    }
-    .unwrap_or(LanguageId::English.strings());
-
-    match updater::begin_winget_update() {
-        Ok(()) => unsafe {
-            let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
-        },
-        Err(error) => {
-            let message = format!("{}.\n\n{}", strings.update_failed, error);
-            show_error_message(hwnd, strings.updates, &message);
-        }
-    }
-}
-
 const STARTUP_REGISTRY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const STARTUP_REGISTRY_KEY: &str = "AIUsageMonitor";
 
 /// Repoints "Start with Windows" at this executable when the value was written
-/// under the pre-rename name, or points at an exe that is gone (the copy
-/// removed when a WinGet install moves to the new package id).
+/// under the pre-rename name, or points at an exe that is gone.
 fn migrate_legacy_startup_entry() {
     let legacy = startup_value(LEGACY_APP_ID).is_some();
     let stale = startup_value(STARTUP_REGISTRY_KEY)
@@ -2042,6 +1997,7 @@ pub fn run() {
     };
 
     migrate_legacy_startup_entry();
+    updater::sync_winget_record();
 
     let class_name = native_interop::wide_str("AIUsageMonitor");
 
@@ -2072,7 +2028,6 @@ pub fn run() {
         DETAILED_TIME.store(settings.detailed_time, Ordering::Relaxed);
         let language_override = settings.language.as_deref().and_then(LanguageId::from_code);
         let language = localization::resolve_language(language_override);
-        let install_channel = updater::current_install_channel();
 
         // Create as layered popup (will be reparented into taskbar)
         let title = native_interop::wide_str(language.strings().window_title);
@@ -2126,7 +2081,6 @@ pub fn run() {
                 embedded: false,
                 language_override,
                 language,
-                install_channel,
                 session_text: "--".to_string(),
                 weekly_text: "--".to_string(),
                 codex_session_text: "--".to_string(),
@@ -3293,35 +3247,18 @@ unsafe extern "system" fn wnd_proc(
                     });
                 }
                 IDM_VERSION_ACTION => {
-                    let (install_channel, release) = {
+                    let release = {
                         let state = lock_state();
-                        match state.as_ref() {
-                            Some(s) => (
-                                s.install_channel,
-                                match &s.update_status {
-                                    UpdateStatus::Available(release) => Some(release.clone()),
-                                    _ => None,
-                                },
-                            ),
-                            None => (InstallChannel::Portable, None),
+                        match state.as_ref().map(|s| &s.update_status) {
+                            Some(UpdateStatus::Available(release)) => Some(release.clone()),
+                            _ => None,
                         }
                     };
 
-                    match install_channel {
-                        InstallChannel::Winget => {
-                            if release.is_some() {
-                                begin_winget_update(hwnd);
-                            } else {
-                                begin_update_check(hwnd, true);
-                            }
-                        }
-                        InstallChannel::Portable => {
-                            if let Some(release) = release {
-                                begin_update_apply(hwnd, release);
-                            } else {
-                                begin_update_check(hwnd, true);
-                            }
-                        }
+                    if let Some(release) = release {
+                        begin_update_apply(hwnd, release);
+                    } else {
+                        begin_update_check(hwnd, true);
                     }
                 }
                 2 => {
@@ -3519,10 +3456,8 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
         let (
             current_interval,
             strings,
-            language,
             language_override,
             dark_override,
-            install_channel,
             update_status,
             widget_visible,
             show_claude_code,
@@ -3538,10 +3473,8 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
                 Some(s) => (
                     s.poll_interval_ms,
                     s.language.strings(),
-                    s.language,
                     s.language_override,
                     s.dark_override,
-                    s.install_channel,
                     s.update_status.clone(),
                     s.widget_visible,
                     s.show_claude_code,
@@ -3555,10 +3488,8 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
                 None => (
                     POLL_15_MIN,
                     LanguageId::English.strings(),
-                    LanguageId::English,
                     None,
                     None,
-                    InstallChannel::Portable,
                     UpdateStatus::Idle,
                     true,
                     true,
@@ -3804,8 +3735,7 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
 
         let _ = AppendMenuW(settings_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-        let version_label =
-            version_action_label(strings, language, install_channel, &update_status);
+        let version_label = version_action_label(strings, &update_status);
         let version_str = native_interop::wide_str(&version_label);
         let version_flags = if matches!(
             update_status,

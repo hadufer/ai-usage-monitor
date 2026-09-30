@@ -5,12 +5,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use crate::diagnose;
 use serde::Deserialize;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Security::Cryptography::{
     BCryptCloseAlgorithmProvider, BCryptHash, BCryptOpenAlgorithmProvider, BCRYPT_ALG_HANDLE,
     BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS, BCRYPT_SHA256_ALGORITHM,
+};
+use windows::Win32::System::Registry::{
+    RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
 };
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
@@ -21,19 +25,6 @@ const RELEASE_ASSET_NAME: &str = "ai-usage-monitor.exe";
 const HELPER_EXE_NAME: &str = "updater-helper.exe";
 const DOWNLOAD_EXE_NAME: &str = "update-download.exe";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-// Keep this aligned with the package identifier used in winget-pkgs.
-const WINGET_PACKAGE_ID: &str = "hadufer.AIUsageMonitor";
-/// Identifier the package was published under before the rename.
-const LEGACY_WINGET_PACKAGE_ID: &str = "hadufer.ClaudeCodeUsageMonitor";
-/// Command WinGet puts on `PATH` for the package.
-const WINGET_COMMAND: &str = "ai-usage-monitor";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InstallChannel {
-    Portable,
-    Winget,
-}
 
 #[derive(Clone, Debug)]
 pub struct ReleaseDescriptor {
@@ -82,13 +73,6 @@ pub fn handle_cli_mode(args: &[String]) -> Option<i32> {
     None
 }
 
-pub fn current_install_channel() -> InstallChannel {
-    match std::env::current_exe() {
-        Ok(path) if is_winget_install_path(&path) => InstallChannel::Winget,
-        _ => InstallChannel::Portable,
-    }
-}
-
 pub fn check_for_updates() -> Result<UpdateCheckResult, String> {
     match fetch_latest_release()? {
         Some(release) => Ok(UpdateCheckResult::Available(release)),
@@ -96,32 +80,102 @@ pub fn check_for_updates() -> Result<UpdateCheckResult, String> {
     }
 }
 
-pub fn begin_winget_update() -> Result<(), String> {
-    let current_exe =
+/// The running exe with symlinks resolved: WinGet may start it through a link
+/// in its `Links` folder, and an update has to replace the file behind it.
+fn resolved_current_exe() -> Result<PathBuf, String> {
+    let exe =
         std::env::current_exe().map_err(|e| format!("Unable to locate current executable: {e}"))?;
-    let current_dir = current_exe
+    let resolved = std::fs::canonicalize(&exe).unwrap_or(exe);
+    Ok(match resolved.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(plain) if !plain.starts_with("UNC\\") => PathBuf::from(plain),
+        _ => resolved,
+    })
+}
+
+/// A WinGet install updates itself like any other copy, so WinGet's own record
+/// of it (version and file hash) is brought in step afterwards. Without that,
+/// `winget list` keeps showing the old version, and `winget upgrade` and
+/// `winget uninstall` refuse the file as modified.
+/// ponytail: per-user installs only; a machine-wide one cannot update itself anyway.
+pub fn sync_winget_record() {
+    if let Ok(exe) = resolved_current_exe() {
+        sync_winget_record_under(r"Software\Microsoft\Windows\CurrentVersion\Uninstall", &exe);
+    }
+}
+
+fn sync_winget_record_under(uninstall_key: &str, exe: &Path) {
+    // WinGet keeps each portable package in a folder named after its record.
+    let Some(record) = exe
         .parent()
-        .ok_or_else(|| "Unable to determine the app directory for restart.".to_string())?;
-    let command = winget_upgrade_command(
-        std::process::id(),
-        &current_exe.to_string_lossy(),
-        &current_dir.to_string_lossy(),
-    );
+        .and_then(|dir| dir.file_name())
+        .and_then(|name| name.to_str())
+    else {
+        return;
+    };
+    let key = format!(r"{uninstall_key}\{record}");
+    let installed_here = registry_string(&key, "TargetFullPath")
+        .is_some_and(|target| target.eq_ignore_ascii_case(&exe.to_string_lossy()));
+    let version = env!("CARGO_PKG_VERSION");
+    if !installed_here || registry_string(&key, "DisplayVersion").as_deref() == Some(version) {
+        return;
+    }
+    let Ok(digest) = std::fs::read(&exe).map_err(|e| e.to_string()).and_then(|bytes| sha256_hex(&bytes)) else {
+        return;
+    };
+    // The version last, so an interrupted sync is retried on the next start.
+    if set_registry_string(&key, "SHA256", &digest) {
+        set_registry_string(&key, "DisplayVersion", version);
+        diagnose::log(format!("WinGet record {record} brought to {version}"));
+    }
+}
 
-    Command::new("powershell.exe")
-        .arg("-NoLogo")
-        .arg("-Command")
-        .arg(&command)
-        .creation_flags(CREATE_NEW_CONSOLE)
-        .spawn()
-        .map_err(|e| format!("Unable to launch WinGet update command: {e}"))?;
+fn registry_string(key: &str, name: &str) -> Option<String> {
+    let key = wide_str(key);
+    let name = wide_str(name);
+    let mut buf = [0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR::from_raw(key.as_ptr()),
+            PCWSTR::from_raw(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+        .ok()
+        .ok()?;
+    }
+    let len = (size as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
 
-    Ok(())
+fn set_registry_string(key: &str, name: &str, value: &str) -> bool {
+    let key = wide_str(key);
+    let name = wide_str(name);
+    let value = wide_str(value);
+    unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR::from_raw(key.as_ptr()),
+            PCWSTR::from_raw(name.as_ptr()),
+            REG_SZ.0,
+            Some(value.as_ptr().cast()),
+            (value.len() * 2) as u32,
+        )
+        .is_ok()
+    }
+}
+
+/// False for a copy in a folder it cannot write to, such as a machine-wide
+/// WinGet install, which unattended updates then leave alone.
+pub fn can_update_in_place() -> bool {
+    resolved_current_exe().is_ok_and(|exe| ensure_target_location_writable(&exe).is_ok())
 }
 
 pub fn begin_self_update(release: &ReleaseDescriptor) -> Result<(), String> {
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Unable to locate current executable: {e}"))?;
+    let current_exe = resolved_current_exe()?;
     ensure_target_location_writable(&current_exe)?;
 
     let stage_dir = updates_dir()?;
@@ -461,69 +515,6 @@ fn updates_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "Unable to resolve a writable local updates directory.".to_string())
 }
 
-fn winget_upgrade_command(pid: u32, target: &str, working_dir: &str) -> String {
-    // WinGet cannot move an install to a new identifier, so a copy installed
-    // under the old one installs the new package, then removes itself.
-    let upgrade = if is_legacy_winget_install(Path::new(target)) {
-        format!(
-            concat!(
-                "winget install --id {new} --exact; ",
-                "$exitCode = $LASTEXITCODE; ",
-                "if ($exitCode -eq 0) {{ ",
-                "winget uninstall --id {legacy} --exact; ",
-                "$env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + ",
-                "[Environment]::GetEnvironmentVariable('Path', 'Machine'); ",
-                "$target = (Get-Command {command}).Source; ",
-                "$workingDir = Split-Path $target ",
-                "}}; "
-            ),
-            new = WINGET_PACKAGE_ID,
-            legacy = LEGACY_WINGET_PACKAGE_ID,
-            command = WINGET_COMMAND,
-        )
-    } else {
-        format!(
-            "winget upgrade --id {WINGET_PACKAGE_ID} --exact; $exitCode = $LASTEXITCODE; "
-        )
-    };
-    let target = powershell_single_quoted(target);
-    let working_dir = powershell_single_quoted(working_dir);
-
-    format!(
-        concat!(
-            "$ErrorActionPreference = 'Stop'; ",
-            "$pidToWait = {pid}; ",
-            "$target = '{target}'; ",
-            "$workingDir = '{working_dir}'; ",
-            "try {{ Wait-Process -Id $pidToWait -Timeout 30 -ErrorAction Stop }} catch {{ }}; ",
-            "{upgrade}",
-            "if ($exitCode -eq 0) {{ ",
-            "Start-Sleep -Seconds 2; ",
-            "Start-Process -FilePath $target -WorkingDirectory $workingDir; ",
-            "exit 0 ",
-            "}}; ",
-            "Write-Host ''; ",
-            "Write-Host 'WinGet update failed with exit code' $exitCode; ",
-            "Read-Host 'Press Enter to close'; ",
-            "exit $exitCode"
-        ),
-        pid = pid,
-        target = target,
-        working_dir = working_dir,
-        upgrade = upgrade,
-    )
-}
-
-/// WinGet keeps each portable package in a folder named `<id>_<source>`.
-fn is_legacy_winget_install(path: &Path) -> bool {
-    let marker = format!("\\{}_", LEGACY_WINGET_PACKAGE_ID.to_ascii_lowercase());
-    is_winget_install_path(path) && normalize_path(path).contains(&marker)
-}
-
-fn powershell_single_quoted(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
 fn backup_path_for(target: &Path) -> PathBuf {
     let file_name = target
         .file_name()
@@ -569,59 +560,6 @@ fn user_agent() -> &'static str {
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"))
 }
 
-fn is_winget_install_path(path: &Path) -> bool {
-    let normalized_path = normalize_path(path);
-    winget_install_roots()
-        .into_iter()
-        .map(|root| normalize_path(&root))
-        .any(|root| normalized_path.starts_with(&root))
-}
-
-fn winget_install_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        roots.push(
-            PathBuf::from(local_app_data)
-                .join("Microsoft")
-                .join("WinGet")
-                .join("Packages"),
-        );
-    }
-
-    if let Ok(program_files) = std::env::var("ProgramFiles") {
-        roots.push(PathBuf::from(program_files).join("WinGet").join("Packages"));
-    } else {
-        roots.push(PathBuf::from(r"C:\Program Files\WinGet\Packages"));
-    }
-
-    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
-        roots.push(
-            PathBuf::from(program_files_x86)
-                .join("WinGet")
-                .join("Packages"),
-        );
-    } else {
-        roots.push(PathBuf::from(r"C:\Program Files (x86)\WinGet\Packages"));
-    }
-
-    roots
-}
-
-fn normalize_path(path: &Path) -> String {
-    let normalized = path
-        .to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_ascii_lowercase();
-
-    normalized
-        .strip_prefix("\\\\?\\unc\\")
-        .map(|rest| format!("\\\\{rest}"))
-        .or_else(|| normalized.strip_prefix("\\\\?\\").map(str::to_owned))
-        .unwrap_or(normalized)
-}
-
 fn is_version_newer(candidate: &str, current: &str) -> bool {
     parse_version(candidate) > parse_version(current)
 }
@@ -663,15 +601,6 @@ mod tests {
         let (owner, repo) = github_repo().expect("repository should be configured");
         assert_eq!(owner, "hadufer");
         assert_eq!(repo, "ai-usage-monitor");
-    }
-
-    #[test]
-    fn the_winget_package_id_belongs_to_the_release_owner() {
-        let (owner, _) = github_repo().expect("repository should be configured");
-        assert!(
-            WINGET_PACKAGE_ID.starts_with(&format!("{owner}.")),
-            "winget id {WINGET_PACKAGE_ID} does not belong to {owner}"
-        );
     }
 
     #[test]
@@ -722,23 +651,39 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_installed_under_the_old_winget_id_moves_to_the_new_one() {
-        let packages = PathBuf::from(std::env::var("LOCALAPPDATA").unwrap())
-            .join(r"Microsoft\WinGet\Packages");
-        let legacy = packages
-            .join("hadufer.ClaudeCodeUsageMonitor_Microsoft.Winget.Source_8wekyb3d8bbwe")
-            .join("claude-code-usage-monitor.exe");
-        let current = packages
-            .join("hadufer.AIUsageMonitor_Microsoft.Winget.Source_8wekyb3d8bbwe")
-            .join("ai-usage-monitor.exe");
+    fn a_self_updated_winget_copy_brings_its_winget_record_in_step() {
+        let root = format!(r"Software\AIUsageMonitorTest{}", std::process::id());
+        let record = "hadufer.AIUsageMonitor_Test";
+        let base = std::env::temp_dir().join(format!("aium-test-{}", std::process::id()));
+        let dir = base.join(record);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("ai-usage-monitor.exe");
+        std::fs::write(&exe, b"abc").unwrap();
+        let key = format!(r"{root}\{record}");
+        assert!(set_registry_string(&key, "TargetFullPath", &exe.to_string_lossy()));
+        assert!(set_registry_string(&key, "DisplayVersion", "0.0.1"));
+        assert!(set_registry_string(&key, "SHA256", "stale"));
 
-        let command = winget_upgrade_command(1, &legacy.to_string_lossy(), "x");
-        assert!(command.contains("winget install --id hadufer.AIUsageMonitor --exact"));
-        assert!(command.contains("winget uninstall --id hadufer.ClaudeCodeUsageMonitor --exact"));
+        // A copy in a folder of the same name that the record does not point at
+        // leaves it alone.
+        let other = base.join("sub").join(record).join("ai-usage-monitor.exe");
+        sync_winget_record_under(&root, &other);
+        let untouched = registry_string(&key, "DisplayVersion");
 
-        let command = winget_upgrade_command(1, &current.to_string_lossy(), "x");
-        assert!(command.contains("winget upgrade --id hadufer.AIUsageMonitor --exact"));
-        assert!(!command.contains("uninstall"));
+        sync_winget_record_under(&root, &exe);
+        let version = registry_string(&key, "DisplayVersion");
+        let digest = registry_string(&key, "SHA256");
+
+        let _ = Command::new("reg")
+            .args(["delete", &format!(r"HKCU\{root}"), "/f"])
+            .output();
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(untouched.as_deref(), Some("0.0.1"));
+        assert_eq!(version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            digest.as_deref(),
+            Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
     }
 
     #[test]

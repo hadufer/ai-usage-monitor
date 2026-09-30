@@ -94,22 +94,6 @@ impl LanguageId {
         }
     }
 
-    pub fn update_via_winget_label(self) -> &'static str {
-        match self {
-            Self::English => english::UPDATE_VIA_WINGET_LABEL,
-            Self::Dutch => dutch::UPDATE_VIA_WINGET_LABEL,
-            Self::Spanish => spanish::UPDATE_VIA_WINGET_LABEL,
-            Self::French => french::UPDATE_VIA_WINGET_LABEL,
-            Self::German => german::UPDATE_VIA_WINGET_LABEL,
-            Self::Japanese => japanese::UPDATE_VIA_WINGET_LABEL,
-            Self::Korean => korean::UPDATE_VIA_WINGET_LABEL,
-            Self::TraditionalChinese => traditional_chinese::UPDATE_VIA_WINGET_LABEL,
-            Self::SimplifiedChinese => simplified_chinese::UPDATE_VIA_WINGET_LABEL,
-            Self::Russian => russian::UPDATE_VIA_WINGET_LABEL,
-            Self::PortugueseBrazil => portuguese_brazil::UPDATE_VIA_WINGET_LABEL,
-        }
-    }
-
     pub fn from_code(code: &str) -> Option<Self> {
         let normalized = code.trim().replace('_', "-").to_ascii_lowercase();
         if normalized.is_empty() || normalized == "system" {
@@ -221,10 +205,6 @@ pub fn detect_system_language() -> LanguageId {
         .or_else(default_ui_locale)
         .or_else(default_locale_name)
         .unwrap_or(LanguageId::English)
-}
-
-pub fn update_via_winget(language: LanguageId) -> &'static str {
-    language.update_via_winget_label()
 }
 
 fn preferred_ui_languages() -> Vec<String> {

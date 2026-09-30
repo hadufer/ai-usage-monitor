@@ -53,16 +53,15 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 winget install hadufer.AIUsageMonitor
 ```
 
-That is the recommended way: it installs under your own profile, so it never asks for administrator rights, and `winget upgrade` keeps it current. If WinGet reports `No package found matching input criteria`, run `winget source update` first — your index is older than the package.
+That is the recommended way: it installs under your own profile, so it never asks for administrator rights. WinGet only does the first install: from then on the app keeps itself current from this repository's releases, like every other copy (see [Updates](#updates)).
 
-Installed it as `hadufer.ClaudeCodeUsageMonitor`, its name before the rename? Switch once, your settings stay:
+The package is new under this name: until the rename in 1.7.0 it was published as `hadufer.ClaudeCodeUsageMonitor`, and `hadufer.AIUsageMonitor` is still waiting for review in winget-pkgs ([#444088](https://github.com/microsoft/winget-pkgs/pull/444088)). Until it is published, WinGet reports `No package found matching input criteria`: take the installer below instead. If it still says so once the package is out, run `winget source update` — your index is older than the package.
+
+Installed it as `hadufer.ClaudeCodeUsageMonitor`? There is nothing to switch: from 1.7.1 on the app keeps itself current whichever id installed it. An older copy cannot update itself (see [Updates](#updates)), so run this once to bring it there:
 
 ```powershell
-winget uninstall hadufer.ClaudeCodeUsageMonitor
-winget install hadufer.AIUsageMonitor
+winget upgrade hadufer.ClaudeCodeUsageMonitor
 ```
-
-From 1.7.0 on, a copy still installed under the old id does that switch itself the next time you update it from the tray menu.
 
 If you would rather not use WinGet, download **`ai-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/ai-usage-monitor/releases) page and run it. It gives you the same per-user install: a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally the command on your `PATH`. Or take `ai-usage-monitor.exe` from the same page, which runs on its own with nothing installed.
 
@@ -306,8 +305,20 @@ Only code signing with a key that never touches CI would defend against that, an
 this project has none. If that matters to you, turn auto-install off and build
 from source.
 
-A WinGet install is left alone: it is updated through WinGet, which opens a
-console window and has no business doing so unattended.
+A WinGet install updates itself the same way, from this repository rather than
+through WinGet, whose catalogue can take days to pick up a release. The app then
+writes its new version and hash into WinGet's record of the install, so
+`winget list` shows what is actually running, and `winget upgrade` and
+`winget uninstall` do not reject the file as modified. The exception is a
+machine-wide install (`--scope machine`), which sits in a folder the app cannot
+write to: it leaves that one to `winget upgrade`.
+
+Coming from 1.6.0 or older? Those versions were built before the repository was
+renamed, and the first rule above makes them refuse downloads from its new
+address, so their update check fails. Download 1.7.0 once from the
+[Releases](https://github.com/hadufer/ai-usage-monitor/releases) page: the
+installer upgrades an existing install in place, and your settings and
+`Start with Windows` choice carry over. Updates work on their own from there.
 
 One wrinkle worth knowing if you used the installer: a self-update replaces the
 executable, but not the version recorded in Add/Remove Programs, which will keep
@@ -407,7 +418,7 @@ Notes:
 - If your Claude Code token is expired, the app may ask the local Claude CLI to refresh it in the background
 - If your Codex token is expired, the app may ask the local Codex CLI to refresh it in the background. The monitor does not write `auth.json` itself; any credential update is handled by the Codex CLI.
 - If your Antigravity token is expired, open Antigravity and sign in again. The monitor does not write Windows Credential Manager entries itself.
-- Portable installs can update themselves by downloading the latest release from this repository
+- The app can update itself by downloading the latest release from this repository
 - Proxies should be trusted because proxied usage requests include your OAuth bearer token inside the TLS connection
 
 ## How It Works

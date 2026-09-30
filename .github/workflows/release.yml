@@ -18,10 +18,10 @@ permissions:
 env:
   RELEASE_ASSET_NAME: ai-usage-monitor.exe
   WINGET_PACKAGE_ID: hadufer.AIUsageMonitor
-  # Installs made under the pre-rename id only see releases published to it,
-  # and move themselves to the new id the next time they update.
+  # Copies at 1.6.0 or older cannot update themselves, so installs made under
+  # the pre-rename id need one release through WinGet to reach one that can.
   # ponytail: stop updating it, then request its removal from winget-pkgs,
-  # once those installs have had time to move.
+  # once those installs have had time to upgrade.
   LEGACY_RELEASE_ASSET_NAME: claude-code-usage-monitor.exe
   LEGACY_WINGET_PACKAGE_ID: hadufer.ClaudeCodeUsageMonitor
 

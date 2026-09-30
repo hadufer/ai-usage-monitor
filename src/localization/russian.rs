@@ -1,7 +1,5 @@
 use super::Strings;
 
-pub(super) const UPDATE_VIA_WINGET_LABEL: &str = "Обновить через WinGet";
-
 pub(super) const STRINGS: Strings = Strings {
     window_title: "Монитор использования Claude Code",
     refresh: "Обновить",

@@ -1,7 +1,5 @@
 use super::Strings;
 
-pub(super) const UPDATE_VIA_WINGET_LABEL: &str = "透過 WinGet 更新";
-
 pub(super) const STRINGS: Strings = Strings {
     window_title: "Claude Code 使用量監控",
     refresh: "重新整理",
