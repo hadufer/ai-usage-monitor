@@ -219,6 +219,8 @@ pub struct Badge {
     pub text: String,
     pub band: Option<Band>,
     pub hot: bool,
+    /// A newer release is waiting to be installed.
+    pub update: bool,
 }
 
 // --- painter ----------------------------------------------------------------
@@ -1385,6 +1387,13 @@ pub fn paint_badge(bits: *mut c_void, size: i32, badge: &Badge, pal: &Palette) -
         font_px -= step;
     }
     p.text(0, 0, size, size, &badge.text, Face::Value, font_px, ink, Align::Center);
+    if badge.update {
+        // The clock marker's colour asks for attention without reading as a
+        // usage band. Sized to the margin above the digits, so it covers the
+        // outline's corner and never a numeral.
+        let dot = (size as f32 / 4.0).round() as i32;
+        p.fill_round(size - dot, 0, dot, dot, dot as f32 / 2.0, pal.bug);
+    }
     drop(p);
 
     let pixels = unsafe { std::slice::from_raw_parts_mut(bits as *mut u32, (size * size) as usize) };
@@ -1695,11 +1704,14 @@ mod tests {
             // Tray badges at the sizes the notification area asks for at 100%,
             // 125% and 150%, one row each, magnified 4x without smoothing.
             let badges = [
-                Badge { text: "62".into(), band: Some(Band::AtRisk), hot: false },
-                Badge { text: "71".into(), band: Some(Band::Over), hot: true },
-                Badge { text: "18".into(), band: Some(Band::OnTrack), hot: false },
-                Badge { text: "100".into(), band: Some(Band::Over), hot: false },
-                Badge { text: "CX".into(), band: None, hot: false },
+                Badge { text: "62".into(), band: Some(Band::AtRisk), hot: false, update: false },
+                Badge { text: "71".into(), band: Some(Band::Over), hot: true, update: false },
+                Badge { text: "18".into(), band: Some(Band::OnTrack), hot: false, update: false },
+                Badge { text: "100".into(), band: Some(Band::Over), hot: false, update: false },
+                Badge { text: "CX".into(), band: None, hot: false, update: false },
+                Badge { text: "18".into(), band: Some(Band::OnTrack), hot: false, update: true },
+                Badge { text: "71".into(), band: Some(Band::Over), hot: true, update: true },
+                Badge { text: "100".into(), band: Some(Band::Over), hot: false, update: true },
             ];
             let pal = Palette::new(dark, &pace::Settings::default());
             let zoom = 4;

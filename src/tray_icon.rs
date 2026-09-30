@@ -78,6 +78,7 @@ pub fn create_icon(icon: &TrayIconData) -> HICON {
                 text: icon.kind.code().to_string(),
                 band: None,
                 hot: false,
+                update: false,
             };
             &placeholder
         }

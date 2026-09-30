@@ -129,7 +129,7 @@ Each badge is the widget's boxed 5-hour value at icon size: outlined in amber or
 
 <sub>The badges at the 100%, 125% and 150% icon sizes, magnified four times.</sub>
 
-Hovering over a tray icon shows the usage values for that model.
+Hovering over a tray icon shows the usage values for that model. A magenta dot in the corner of the first icon means an update is waiting (see [Updates](#updates)).
 
 ### The Usage Panel
 
@@ -288,6 +288,11 @@ The app checks this repository's releases on an interval, 24 hours by default, a
 installs anything newer on its own. Turn that off from the right-click **Settings**
 menu if you would rather be asked, and change the interval with
 `update_check_interval_hours` in the settings file.
+
+An update that is waiting, because you turned that off or because installing it
+failed, shows as a small magenta dot in the corner of the first tray icon, whose
+tooltip then starts with the version to update to. The last line of the
+**Settings** menu installs it, and checks for one on demand.
 
 An update replaces the running executable, so it is not taken on trust:
 

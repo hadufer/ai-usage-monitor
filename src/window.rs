@@ -843,6 +843,7 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                             text: readout.text,
                             band: readout.band,
                             hot: false,
+                            update: false,
                         }),
                         palette,
                         tooltip: tray_tooltip_for(s, provider),
@@ -851,6 +852,22 @@ fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
                 .collect();
             if let Some(badge) = hottest(&heat).and_then(|index| icons[index].badge.as_mut()) {
                 badge.hot = true;
+            }
+            // One dot is enough, on the first icon; the Settings menu line says
+            // the same, and installs it.
+            if let (UpdateStatus::Available(release), Some(first)) =
+                (&s.update_status, icons.first_mut())
+            {
+                if let Some(badge) = first.badge.as_mut() {
+                    badge.update = true;
+                }
+                first.tooltip = format!(
+                    "{} v{}
+{}",
+                    s.language.strings().update_to,
+                    release.latest_version,
+                    first.tooltip
+                );
             }
             icons
         }
@@ -2950,6 +2967,7 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_APP_UPDATE_CHECK_COMPLETE => {
             schedule_auto_update_check(hwnd);
+            sync_tray_icons(hwnd);
             LRESULT(0)
         }
         WM_APP_REATTACH => {
