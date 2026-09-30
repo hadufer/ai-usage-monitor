@@ -57,6 +57,8 @@ struct AppState {
     tray_notify_hwnd: Option<HWND>,
     win_event_hook: Option<HWINEVENTHOOK>,
     is_dark: bool,
+    /// `None` follows Windows; otherwise the palette the user picked.
+    dark_override: Option<bool>,
     embedded: bool,
     language_override: Option<LanguageId>,
     language: LanguageId,
@@ -218,6 +220,9 @@ const IDM_PACE_COLORS: u16 = 32;
 const IDM_SCOPED_WEEKLY_ROW: u16 = 33;
 const IDM_AUTO_INSTALL_UPDATES: u16 = 34;
 const IDM_DETAILED_TIME: u16 = 35;
+const IDM_THEME_SYSTEM: u16 = 80;
+const IDM_THEME_DARK: u16 = 81;
+const IDM_THEME_LIGHT: u16 = 82;
 // The Models menu ids are no longer defined here: each provider carries its
 // own id in `src/providers.rs`.
 
@@ -554,6 +559,9 @@ struct SettingsFile {
     poll_interval_ms: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<String>,
+    /// `None` follows the Windows dark or light setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dark_mode: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_update_check_unix: Option<u64>,
     #[serde(default = "default_widget_visible")]
@@ -633,6 +641,7 @@ impl Default for SettingsFile {
             scoped_label_last: None,
             poll_interval_ms: default_poll_interval(),
             language: None,
+            dark_mode: None,
             last_update_check_unix: None,
             widget_visible: true,
             show_claude_code: true,
@@ -785,6 +794,7 @@ fn save_state_settings() {
         settings.language = s
             .language_override
             .map(|language| language.code().to_string());
+        settings.dark_mode = s.dark_override;
         settings.last_update_check_unix = s.last_update_check_unix;
         settings.widget_visible = s.widget_visible;
         settings.show_claude_code = s.show_claude_code;
@@ -2048,7 +2058,7 @@ pub fn run() {
 
         diagnose::log(format!("main window created hwnd={:?}", hwnd));
 
-        let is_dark = theme::is_dark_mode();
+        let is_dark = settings.dark_mode.unwrap_or_else(theme::is_dark_mode);
         let mut embedded = false;
 
         {
@@ -2059,6 +2069,7 @@ pub fn run() {
                 tray_notify_hwnd: None,
                 win_event_hook: None,
                 is_dark,
+                dark_override: settings.dark_mode,
                 embedded: false,
                 language_override,
                 language,
@@ -2575,10 +2586,10 @@ fn schedule_countdown_timer() {
 }
 
 fn check_theme_change() {
-    let new_dark = theme::is_dark_mode();
     let changed = {
         let mut state = lock_state();
         if let Some(s) = state.as_mut() {
+            let new_dark = s.dark_override.unwrap_or_else(theme::is_dark_mode);
             if s.is_dark != new_dark {
                 s.is_dark = new_dark;
                 true
@@ -3401,6 +3412,20 @@ unsafe extern "system" fn wnd_proc(
                     save_state_settings();
                     render_layered();
                 }
+                IDM_THEME_SYSTEM | IDM_THEME_DARK | IDM_THEME_LIGHT => {
+                    {
+                        let mut state = lock_state();
+                        if let Some(s) = state.as_mut() {
+                            s.dark_override = match id {
+                                IDM_THEME_DARK => Some(true),
+                                IDM_THEME_LIGHT => Some(false),
+                                _ => None,
+                            };
+                        }
+                    }
+                    save_state_settings();
+                    check_theme_change();
+                }
                 id if id == tray_icon::IDM_TOGGLE_WIDGET => {
                     toggle_widget_visibility(hwnd);
                 }
@@ -3443,6 +3468,7 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
             strings,
             language,
             language_override,
+            dark_override,
             install_channel,
             update_status,
             widget_visible,
@@ -3461,6 +3487,7 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
                     s.language.strings(),
                     s.language,
                     s.language_override,
+                    s.dark_override,
                     s.install_channel,
                     s.update_status.clone(),
                     s.widget_visible,
@@ -3476,6 +3503,7 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
                     POLL_15_MIN,
                     LanguageId::English.strings(),
                     LanguageId::English,
+                    None,
                     None,
                     InstallChannel::Portable,
                     UpdateStatus::Idle,
@@ -3691,6 +3719,34 @@ pub(crate) fn show_context_menu(hwnd: HWND) {
             MF_POPUP,
             language_menu.0 as usize,
             PCWSTR::from_raw(language_label.as_ptr()),
+        );
+
+        let theme_menu = CreatePopupMenu().unwrap();
+        for (id, value, label) in [
+            (IDM_THEME_SYSTEM, None, strings.system_default),
+            (IDM_THEME_DARK, Some(true), strings.theme_dark),
+            (IDM_THEME_LIGHT, Some(false), strings.theme_light),
+        ] {
+            let label_str = native_interop::wide_str(label);
+            let flags = if dark_override == value {
+                MF_CHECKED
+            } else {
+                MENU_ITEM_FLAGS(0)
+            };
+            let _ = AppendMenuW(
+                theme_menu,
+                flags,
+                id as usize,
+                PCWSTR::from_raw(label_str.as_ptr()),
+            );
+        }
+
+        let theme_label = native_interop::wide_str(strings.theme);
+        let _ = AppendMenuW(
+            settings_menu,
+            MF_POPUP,
+            theme_menu.0 as usize,
+            PCWSTR::from_raw(theme_label.as_ptr()),
         );
 
         let _ = AppendMenuW(settings_menu, MF_SEPARATOR, 0, PCWSTR::null());

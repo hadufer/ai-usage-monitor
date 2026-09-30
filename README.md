@@ -5,7 +5,7 @@
 
 <img src=".github/widget.png" width="178" alt="The widget in a dark taskbar: Claude at 62% with 2h10m left, amber because it is ahead of its clock, and Codex at 71% with 3h40m left, red and reversed because it is burning fastest">&nbsp;&nbsp;<img src=".github/widget-day.png" width="178" alt="The same widget in a light taskbar, drawn with the day palette">
 
-<sub>Rendered by the app's own drawing code, with example values. The widget follows the Windows dark or light setting.</sub>
+<sub>Rendered by the app's own drawing code, with example values. The widget follows the Windows dark or light setting, unless you pick one under **Settings > Theme**.</sub>
 
 A lightweight Windows taskbar widget for people already using Claude Code, with optional Codex and Google Antigravity usage display.
 
@@ -25,7 +25,7 @@ It sits in your taskbar and shows how much of your Claude Code, Codex, and/or An
 - A small native widget that lives directly in the Windows taskbar
 - System tray icon badges showing your enabled model usage percentage
 - Left-click the tray icon to toggle the taskbar widget on or off
-- Right-click options for refresh, displayed models, update frequency, language, startup, widget visibility, and updates
+- Right-click options for refresh, displayed models, update frequency, language, theme, startup, widget visibility, and updates
 - Multi-monitor taskbar placement, so the widget can live on the taskbar for the screen you prefer
 
 ## Who This Is For
