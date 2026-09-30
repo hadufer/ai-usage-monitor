@@ -5,12 +5,15 @@
   #define MyAppVersion "0.0.0"
 #endif
 
-#define MyAppName "Claude Code Usage Monitor"
+#define MyAppName "AI Usage Monitor"
 #define MyAppPublisher "Hassan Dufer"
 #define MyAppURL "https://github.com/hadufer/ai-usage-monitor"
-#define MyAppExeName "claude-code-usage-monitor.exe"
+#define MyAppExeName "ai-usage-monitor.exe"
+; Name of the exe before the rename, still sitting in upgraded installs.
+#define LegacyExeName "claude-code-usage-monitor.exe"
 
 [Setup]
+; Unchanged across the rename so Setup upgrades the existing install in place.
 AppId={{7F3A6E52-4C21-4C7E-9E4B-5B1D2C9A8E31}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
@@ -27,19 +30,21 @@ VersionInfoVersion={#MyAppVersion}
 ; also the only location the app's own updater can write to.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-DefaultDirName={localappdata}\Programs\ClaudeCodeUsageMonitor
+DefaultDirName={localappdata}\Programs\AIUsageMonitor
 DefaultGroupName={#MyAppName}
+; Otherwise an upgrade keeps the Start Menu folder named before the rename.
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 
 ; The app already guards against a second instance with this named mutex, so
 ; reuse it to have Setup ask the user to close a running copy instead of failing
-; to replace a locked file.
-AppMutex=Global\ClaudeCodeUsageMonitor
+; to replace a locked file. The second name is the one used before the rename.
+AppMutex=Global\AIUsageMonitor,Global\ClaudeCodeUsageMonitor
 CloseApplications=yes
 RestartApplications=no
 
-OutputBaseFilename=claude-code-usage-monitor-setup
+OutputBaseFilename=ai-usage-monitor-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -61,7 +66,12 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 [Tasks]
 ; Deliberately no "start with Windows" task: the app writes that registry value
 ; itself from its tray menu, and a second writer would fight it.
-Name: "addtopath"; Description: "Add to PATH so 'claude-code-usage-monitor' works in a terminal"; GroupDescription: "Optional:"
+Name: "addtopath"; Description: "Add to PATH so 'ai-usage-monitor' works in a terminal"; GroupDescription: "Optional:"
+
+[InstallDelete]
+Type: files; Name: "{app}\{#LegacyExeName}"
+Type: files; Name: "{app}\{#LegacyExeName}.*.bak"
+Type: filesandordirs; Name: "{autoprograms}\Claude Code Usage Monitor"
 
 [Files]
 Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion

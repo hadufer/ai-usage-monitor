@@ -50,29 +50,38 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 ## Install
 
 ```powershell
-winget install hadufer.ClaudeCodeUsageMonitor
+winget install hadufer.AIUsageMonitor
 ```
 
 That is the recommended way: it installs under your own profile, so it never asks for administrator rights, and `winget upgrade` keeps it current. If WinGet reports `No package found matching input criteria`, run `winget source update` first — your index is older than the package.
 
-If you would rather not use WinGet, download **`claude-code-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/ai-usage-monitor/releases) page and run it. It gives you the same per-user install: a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally the command on your `PATH`. Or take `claude-code-usage-monitor.exe` from the same page, which runs on its own with nothing installed.
+Installed it as `hadufer.ClaudeCodeUsageMonitor`, its name before the rename? Switch once, your settings stay:
+
+```powershell
+winget uninstall hadufer.ClaudeCodeUsageMonitor
+winget install hadufer.AIUsageMonitor
+```
+
+From 1.7.0 on, a copy still installed under the old id does that switch itself the next time you update it from the tray menu.
+
+If you would rather not use WinGet, download **`ai-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/ai-usage-monitor/releases) page and run it. It gives you the same per-user install: a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally the command on your `PATH`. Or take `ai-usage-monitor.exe` from the same page, which runs on its own with nothing installed.
 
 All of them are built by CI from the tagged commit. None are code-signed, so Windows SmartScreen will warn you the first time you run a downloaded exe: choose **More info** then **Run anyway**, or check the SHA256 against the release notes if you prefer.
 
 The installer takes the usual silent switches, if you are deploying it:
 
 ```powershell
-claude-code-usage-monitor-setup.exe /SILENT /NORESTART
+ai-usage-monitor-setup.exe /SILENT /NORESTART
 ```
 
 ## Use
 
-The installer puts a **Claude Code Usage Monitor** entry in your Start Menu, so
+The installer puts an **AI Usage Monitor** entry in your Start Menu, so
 that is the shortest way in. If you let it add the app to your `PATH`, or if you
 installed with WinGet, this works from any new terminal:
 
 ```powershell
-claude-code-usage-monitor
+ai-usage-monitor
 ```
 
 With the portable exe, run the file itself: the bare command only exists once
@@ -246,13 +255,13 @@ survive a menu click.
 If you need to troubleshoot startup or visibility issues, run:
 
 ```powershell
-claude-code-usage-monitor --diagnose
+ai-usage-monitor --diagnose
 ```
 
 This writes a log file to:
 
 ```text
-%TEMP%\claude-code-usage-monitor.log
+%TEMP%\ai-usage-monitor.log
 ```
 
 With diagnostics on, that log includes the raw body of the usage responses, which
@@ -271,7 +280,7 @@ one of them once failed silently.
 Settings are saved to:
 
 ```text
-%APPDATA%\ClaudeCodeUsageMonitor\settings.json
+%APPDATA%\AIUsageMonitor\settings.json
 ```
 
 ## Updates
@@ -314,7 +323,7 @@ cargo build --release
 cargo test
 ```
 
-The binary lands in `target\release\claude-code-usage-monitor.exe` and runs from
+The binary lands in `target\release\ai-usage-monitor.exe` and runs from
 wherever you put it.
 
 To reproduce the installer you also need the Inno Setup compiler
@@ -322,7 +331,7 @@ To reproduce the installer you also need the Inno Setup compiler
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" `
-  /DMyAppVersion=1.5.3 /Oinstaller\out installer\claude-code-usage-monitor.iss
+  /DMyAppVersion=1.5.3 /Oinstaller\out installer\ai-usage-monitor.iss
 ```
 
 CI does exactly this on a tag push, and publishes both files to the release. The
@@ -337,10 +346,10 @@ or run `unins000.exe` in the install directory. That removes the executable, the
 Start Menu entries and the `PATH` entry.
 
 Two things are deliberately left behind, because they are yours: the settings file
-at `%APPDATA%\ClaudeCodeUsageMonitor\settings.json`, and the `Start with Windows`
+at `%APPDATA%\AIUsageMonitor\settings.json`, and the `Start with Windows`
 registry value if you enabled it from the tray menu. Untick that menu item before
 uninstalling if you want it gone, or delete
-`ClaudeCodeUsageMonitor` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+`AIUsageMonitor` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Account Support
 

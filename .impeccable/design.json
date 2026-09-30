@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-09-28T14:07:05Z",
-  "title": "Design System: Claude Code Usage Monitor",
+  "title": "Design System: AI Usage Monitor",
   "extensions": {
     "platform": "Native Win32 (Rust, GDI+). The product has no CSS: tokens are Rust constants in src/cockpit.rs, src/pace.rs, src/window.rs and src/flyout.rs. The component snippets below are CSS approximations of the painter in the night palette; the day palette maps role for role. Sizes are logical px at 96 DPI, multiplied by the monitor scale.",
     "colorMeta": {

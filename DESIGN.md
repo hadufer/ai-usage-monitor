@@ -1,5 +1,5 @@
 ---
-name: Claude Code Usage Monitor
+name: AI Usage Monitor
 description: A glass cockpit in the Windows taskbar. Every usage window is an engine tape, and a magenta bug marks where the clock says you should be.
 colors:
   pace-on-track: "#3F9142"
@@ -146,7 +146,7 @@ components:
     height: "16px"
 ---
 
-# Design System: Claude Code Usage Monitor
+# Design System: AI Usage Monitor
 
 ## Overview
 

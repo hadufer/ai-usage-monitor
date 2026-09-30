@@ -1,18 +1,18 @@
 [package]
-name = "claude-code-usage-monitor"
+name = "ai-usage-monitor"
 version = "1.6.0"
 edition = "2021"
 license = "MIT"
-description = "Claude Code Usage Monitor"
+description = "AI Usage Monitor"
 homepage = "https://github.com/hadufer/ai-usage-monitor"
 repository = "https://github.com/hadufer/ai-usage-monitor"
 
 [package.metadata.winres]
 CompanyName = "Hassan Dufer"
-ProductName = "Claude Code Usage Monitor"
-FileDescription = "Claude Code Usage Monitor"
-OriginalFilename = "claude-code-usage-monitor.exe"
-InternalName = "ClaudeCodeUsageMonitor"
+ProductName = "AI Usage Monitor"
+FileDescription = "AI Usage Monitor"
+OriginalFilename = "ai-usage-monitor.exe"
+InternalName = "AIUsageMonitor"
 LegalCopyright = "Copyright (C) 2025 Craig Constable, (C) 2026 Hassan Dufer"
 
 [dependencies]

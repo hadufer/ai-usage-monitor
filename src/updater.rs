@@ -17,13 +17,17 @@ use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
 const GITHUB_API_ACCEPT: &str = "application/vnd.github+json";
 const GITHUB_API_VERSION: &str = "2022-11-28";
-const RELEASE_ASSET_NAME: &str = "claude-code-usage-monitor.exe";
+const RELEASE_ASSET_NAME: &str = "ai-usage-monitor.exe";
 const HELPER_EXE_NAME: &str = "updater-helper.exe";
 const DOWNLOAD_EXE_NAME: &str = "update-download.exe";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 // Keep this aligned with the package identifier used in winget-pkgs.
-const WINGET_PACKAGE_ID: &str = "hadufer.ClaudeCodeUsageMonitor";
+const WINGET_PACKAGE_ID: &str = "hadufer.AIUsageMonitor";
+/// Identifier the package was published under before the rename.
+const LEGACY_WINGET_PACKAGE_ID: &str = "hadufer.ClaudeCodeUsageMonitor";
+/// Command WinGet puts on `PATH` for the package.
+const WINGET_COMMAND: &str = "ai-usage-monitor";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallChannel {
@@ -446,11 +450,11 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) -> Result<(), String> {
 
 fn updates_dir() -> Result<PathBuf, String> {
     dirs::data_local_dir()
-        .map(|dir| dir.join("ClaudeCodeUsageMonitor").join("updates"))
+        .map(|dir| dir.join("AIUsageMonitor").join("updates"))
         .or_else(|| {
             Some(
                 std::env::temp_dir()
-                    .join("ClaudeCodeUsageMonitor")
+                    .join("AIUsageMonitor")
                     .join("updates"),
             )
         })
@@ -458,9 +462,32 @@ fn updates_dir() -> Result<PathBuf, String> {
 }
 
 fn winget_upgrade_command(pid: u32, target: &str, working_dir: &str) -> String {
+    // WinGet cannot move an install to a new identifier, so a copy installed
+    // under the old one installs the new package, then removes itself.
+    let upgrade = if is_legacy_winget_install(Path::new(target)) {
+        format!(
+            concat!(
+                "winget install --id {new} --exact; ",
+                "$exitCode = $LASTEXITCODE; ",
+                "if ($exitCode -eq 0) {{ ",
+                "winget uninstall --id {legacy} --exact; ",
+                "$env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + ",
+                "[Environment]::GetEnvironmentVariable('Path', 'Machine'); ",
+                "$target = (Get-Command {command}).Source; ",
+                "$workingDir = Split-Path $target ",
+                "}}; "
+            ),
+            new = WINGET_PACKAGE_ID,
+            legacy = LEGACY_WINGET_PACKAGE_ID,
+            command = WINGET_COMMAND,
+        )
+    } else {
+        format!(
+            "winget upgrade --id {WINGET_PACKAGE_ID} --exact; $exitCode = $LASTEXITCODE; "
+        )
+    };
     let target = powershell_single_quoted(target);
     let working_dir = powershell_single_quoted(working_dir);
-    let package_id = WINGET_PACKAGE_ID;
 
     format!(
         concat!(
@@ -469,8 +496,7 @@ fn winget_upgrade_command(pid: u32, target: &str, working_dir: &str) -> String {
             "$target = '{target}'; ",
             "$workingDir = '{working_dir}'; ",
             "try {{ Wait-Process -Id $pidToWait -Timeout 30 -ErrorAction Stop }} catch {{ }}; ",
-            "winget upgrade --id {package_id} --exact; ",
-            "$exitCode = $LASTEXITCODE; ",
+            "{upgrade}",
             "if ($exitCode -eq 0) {{ ",
             "Start-Sleep -Seconds 2; ",
             "Start-Process -FilePath $target -WorkingDirectory $workingDir; ",
@@ -484,8 +510,14 @@ fn winget_upgrade_command(pid: u32, target: &str, working_dir: &str) -> String {
         pid = pid,
         target = target,
         working_dir = working_dir,
-        package_id = package_id,
+        upgrade = upgrade,
     )
+}
+
+/// WinGet keeps each portable package in a folder named `<id>_<source>`.
+fn is_legacy_winget_install(path: &Path) -> bool {
+    let marker = format!("\\{}_", LEGACY_WINGET_PACKAGE_ID.to_ascii_lowercase());
+    is_winget_install_path(path) && normalize_path(path).contains(&marker)
 }
 
 fn powershell_single_quoted(value: &str) -> String {
@@ -505,7 +537,7 @@ fn ensure_target_location_writable(target: &Path) -> Result<(), String> {
         "Unable to determine the install directory for the current executable.".to_string()
     })?;
 
-    let probe_path = parent.join(".__ccum_update_probe");
+    let probe_path = parent.join(".__aium_update_probe");
     match File::create(&probe_path) {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe_path);
@@ -645,7 +677,7 @@ mod tests {
     #[test]
     fn a_download_url_outside_this_repository_is_refused() {
         assert!(is_own_release_asset(
-            "https://github.com/hadufer/ai-usage-monitor/releases/download/v1.5.4/claude-code-usage-monitor.exe",
+            "https://github.com/hadufer/ai-usage-monitor/releases/download/v1.5.4/ai-usage-monitor.exe",
             "hadufer",
             "ai-usage-monitor"
         ));
@@ -670,14 +702,14 @@ mod tests {
     #[test]
     fn the_digest_is_taken_from_the_matching_line_only() {
         let listing = "1111111111111111111111111111111111111111111111111111111111111111  other-file.zip
-513c211ac265b5a6770724093d6895dd8012dc68f4f9619af93d2d8ecddcad33 *claude-code-usage-monitor.exe
+513c211ac265b5a6770724093d6895dd8012dc68f4f9619af93d2d8ecddcad33 *ai-usage-monitor.exe
 ";
         assert_eq!(
-            expected_digest(listing, "claude-code-usage-monitor.exe").as_deref(),
+            expected_digest(listing, "ai-usage-monitor.exe").as_deref(),
             Some("513c211ac265b5a6770724093d6895dd8012dc68f4f9619af93d2d8ecddcad33")
         );
         assert!(expected_digest(listing, "not-listed.exe").is_none());
-        assert!(expected_digest("deadbeef  claude-code-usage-monitor.exe", "claude-code-usage-monitor.exe").is_none());
+        assert!(expected_digest("deadbeef  ai-usage-monitor.exe", "ai-usage-monitor.exe").is_none());
     }
 
     #[test]
@@ -687,6 +719,26 @@ mod tests {
             sha256_hex(b"abc").unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn a_copy_installed_under_the_old_winget_id_moves_to_the_new_one() {
+        let packages = PathBuf::from(std::env::var("LOCALAPPDATA").unwrap())
+            .join(r"Microsoft\WinGet\Packages");
+        let legacy = packages
+            .join("hadufer.ClaudeCodeUsageMonitor_Microsoft.Winget.Source_8wekyb3d8bbwe")
+            .join("claude-code-usage-monitor.exe");
+        let current = packages
+            .join("hadufer.AIUsageMonitor_Microsoft.Winget.Source_8wekyb3d8bbwe")
+            .join("ai-usage-monitor.exe");
+
+        let command = winget_upgrade_command(1, &legacy.to_string_lossy(), "x");
+        assert!(command.contains("winget install --id hadufer.AIUsageMonitor --exact"));
+        assert!(command.contains("winget uninstall --id hadufer.ClaudeCodeUsageMonitor --exact"));
+
+        let command = winget_upgrade_command(1, &current.to_string_lossy(), "x");
+        assert!(command.contains("winget upgrade --id hadufer.AIUsageMonitor --exact"));
+        assert!(!command.contains("uninstall"));
     }
 
     #[test]

@@ -323,10 +323,10 @@ const RELAUNCH_THROTTLE_SECS: u64 = 10;
 const RELAUNCH_BACKOFF_SECS: u64 = 30;
 /// Environment flag set on a relaunched child so it waits for the previous
 /// instance's single-instance mutex instead of exiting immediately.
-const ENV_RELAUNCH: &str = "CCUM_RELAUNCH";
+const ENV_RELAUNCH: &str = "AIUM_RELAUNCH";
 /// Unix timestamp (seconds) of the relaunch that spawned this process, passed to
 /// the child so it can detect a relaunch storm.
-const ENV_LAST_RELAUNCH_UNIX: &str = "CCUM_LAST_RELAUNCH_UNIX";
+const ENV_LAST_RELAUNCH_UNIX: &str = "AIUM_LAST_RELAUNCH_UNIX";
 
 /// Relaunch the widget as a fresh process after explorer.exe has restarted.
 ///
@@ -534,11 +534,21 @@ fn lock_state() -> MutexGuard<'static, Option<AppState>> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Folder and registry name the app used before it was renamed.
+const LEGACY_APP_ID: &str = "ClaudeCodeUsageMonitor";
+
 fn settings_path() -> PathBuf {
-    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(appdata)
-        .join("ClaudeCodeUsageMonitor")
-        .join("settings.json")
+    let appdata = PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string()));
+    let path = appdata.join("AIUsageMonitor").join("settings.json");
+    // Copied rather than moved, so a pre-rename build still running keeps its own.
+    if !path.exists() {
+        let legacy = appdata.join(LEGACY_APP_ID).join("settings.json");
+        if legacy.exists() {
+            let _ = std::fs::create_dir_all(path.parent().unwrap());
+            let _ = std::fs::copy(legacy, &path);
+        }
+    }
+    path
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1825,13 +1835,63 @@ fn begin_winget_update(hwnd: HWND) {
 }
 
 const STARTUP_REGISTRY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const STARTUP_REGISTRY_KEY: &str = "ClaudeCodeUsageMonitor";
+const STARTUP_REGISTRY_KEY: &str = "AIUsageMonitor";
+
+/// Repoints "Start with Windows" at this executable when the value was written
+/// under the pre-rename name, or points at an exe that is gone (the copy
+/// removed when a WinGet install moves to the new package id).
+fn migrate_legacy_startup_entry() {
+    let legacy = startup_value(LEGACY_APP_ID).is_some();
+    let stale = startup_value(STARTUP_REGISTRY_KEY)
+        .is_some_and(|exe| !std::path::Path::new(&exe).exists());
+    if legacy {
+        unsafe {
+            let path = native_interop::wide_str(STARTUP_REGISTRY_PATH);
+            let mut hkey = HKEY::default();
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR::from_raw(path.as_ptr()),
+                0,
+                KEY_SET_VALUE,
+                &mut hkey,
+            )
+            .is_ok()
+            {
+                let name = native_interop::wide_str(LEGACY_APP_ID);
+                let _ = RegDeleteValueW(hkey, PCWSTR::from_raw(name.as_ptr()));
+                let _ = RegCloseKey(hkey);
+            }
+        }
+    }
+    if legacy || stale {
+        set_startup_enabled(true);
+    }
+}
 
 /// Returns true only if the startup registry value points to this executable.
 fn is_startup_enabled() -> bool {
+    let Some(reg_value) = startup_value(STARTUP_REGISTRY_KEY) else {
+        return false;
+    };
+    unsafe {
+        // Get the current executable path
+        let mut exe_buf = [0u16; 260];
+        let len = GetModuleFileNameW(None, &mut exe_buf) as usize;
+        if len == 0 {
+            return false;
+        }
+        let current_exe = String::from_utf16_lossy(&exe_buf[..len]);
+
+        // Case-insensitive comparison (Windows paths are case-insensitive)
+        reg_value.eq_ignore_ascii_case(&current_exe)
+    }
+}
+
+/// The exe path stored under `name` in the startup registry key, if any.
+fn startup_value(name: &str) -> Option<String> {
     unsafe {
         let path = native_interop::wide_str(STARTUP_REGISTRY_PATH);
-        let key_name = native_interop::wide_str(STARTUP_REGISTRY_KEY);
+        let key_name = native_interop::wide_str(name);
 
         let mut hkey = HKEY::default();
         let result = RegOpenKeyExW(
@@ -1842,7 +1902,7 @@ fn is_startup_enabled() -> bool {
             &mut hkey,
         );
         if result.is_err() {
-            return false;
+            return None;
         }
 
         // Query the size of the value
@@ -1857,7 +1917,7 @@ fn is_startup_enabled() -> bool {
         );
         if result.is_err() || data_size == 0 {
             let _ = RegCloseKey(hkey);
-            return false;
+            return None;
         }
 
         // Read the value
@@ -1872,26 +1932,17 @@ fn is_startup_enabled() -> bool {
         );
         let _ = RegCloseKey(hkey);
         if result.is_err() {
-            return false;
+            return None;
         }
 
         // Convert the registry value (UTF-16) to a string
         let wide_slice =
             std::slice::from_raw_parts(buf.as_ptr() as *const u16, data_size as usize / 2);
-        let reg_value = String::from_utf16_lossy(wide_slice)
-            .trim_end_matches('\0')
-            .to_string();
-
-        // Get the current executable path
-        let mut exe_buf = [0u16; 260];
-        let len = GetModuleFileNameW(None, &mut exe_buf) as usize;
-        if len == 0 {
-            return false;
-        }
-        let current_exe = String::from_utf16_lossy(&exe_buf[..len]);
-
-        // Case-insensitive comparison (Windows paths are case-insensitive)
-        reg_value.eq_ignore_ascii_case(&current_exe)
+        Some(
+            String::from_utf16_lossy(wide_slice)
+                .trim_end_matches('\0')
+                .to_string(),
+        )
     }
 }
 
@@ -1958,7 +2009,7 @@ pub fn run() {
     // Exception: when relaunched after an explorer restart (ENV_RELAUNCH set),
     // wait for the previous instance to release the mutex, then take over.
     let is_relaunch = std::env::var(ENV_RELAUNCH).is_ok();
-    let mutex_name = native_interop::wide_str("Global\\ClaudeCodeUsageMonitor");
+    let mutex_name = native_interop::wide_str("Global\\AIUsageMonitor");
     let _mutex = unsafe {
         let handle = CreateMutexW(None, true, PCWSTR::from_raw(mutex_name.as_ptr()));
         match handle {
@@ -1990,7 +2041,9 @@ pub fn run() {
         }
     };
 
-    let class_name = native_interop::wide_str("ClaudeCodeUsageMonitor");
+    migrate_legacy_startup_entry();
+
+    let class_name = native_interop::wide_str("AIUsageMonitor");
 
     unsafe {
         let hinstance = GetModuleHandleW(PCWSTR::null()).unwrap();

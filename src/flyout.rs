@@ -137,7 +137,7 @@ fn show(owner: HWND) {
 }
 
 fn create() -> Option<HWND> {
-    let class_name = native_interop::wide_str("ClaudeCodeUsageMonitorFlyout");
+    let class_name = native_interop::wide_str("AIUsageMonitorFlyout");
     unsafe {
         let hinstance = GetModuleHandleW(PCWSTR::null()).ok()?;
         let class = WNDCLASSEXW {

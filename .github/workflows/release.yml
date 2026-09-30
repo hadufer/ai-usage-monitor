@@ -16,8 +16,14 @@ permissions:
   contents: write
 
 env:
-  RELEASE_ASSET_NAME: claude-code-usage-monitor.exe
-  WINGET_PACKAGE_ID: hadufer.ClaudeCodeUsageMonitor
+  RELEASE_ASSET_NAME: ai-usage-monitor.exe
+  WINGET_PACKAGE_ID: hadufer.AIUsageMonitor
+  # Installs made under the pre-rename id only see releases published to it,
+  # and move themselves to the new id the next time they update.
+  # ponytail: stop updating it, then request its removal from winget-pkgs,
+  # once those installs have had time to move.
+  LEGACY_RELEASE_ASSET_NAME: claude-code-usage-monitor.exe
+  LEGACY_WINGET_PACKAGE_ID: hadufer.ClaudeCodeUsageMonitor
 
 jobs:
   build:
@@ -53,8 +59,15 @@ jobs:
           }
           if (-not $iscc) { throw "Inno Setup compiler not found" }
           & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" `
-            "/Oinstaller/out" "installer/claude-code-usage-monitor.iss"
+            "/Oinstaller/out" "installer/ai-usage-monitor.iss"
           if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+
+      # The legacy WinGet id installs this copy, so its installs keep the file
+      # name their "Start with Windows" value points at.
+      # ponytail: drop it together with the legacy WinGet id.
+      - name: Copy the exe under its legacy name
+        shell: pwsh
+        run: Copy-Item target/release/ai-usage-monitor.exe target/release/claude-code-usage-monitor.exe
 
       # The app refuses to install an update it cannot verify against this file,
       # so publishing it is what makes unattended updates possible at all.
@@ -62,8 +75,9 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
+            "target/release/ai-usage-monitor.exe",
             "target/release/claude-code-usage-monitor.exe",
-            "installer/out/claude-code-usage-monitor-setup.exe"
+            "installer/out/ai-usage-monitor-setup.exe"
           )
           $lines = foreach ($f in $files) {
             $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
@@ -77,8 +91,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            target/release/ai-usage-monitor.exe
             target/release/claude-code-usage-monitor.exe
-            installer/out/claude-code-usage-monitor-setup.exe
+            installer/out/ai-usage-monitor-setup.exe
             SHA256SUMS.txt
           generate_release_notes: true
 
@@ -89,7 +104,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          files: installer/out/claude-code-usage-monitor-setup.exe
+          files: installer/out/ai-usage-monitor-setup.exe
 
   winget:
     needs: build
@@ -102,10 +117,11 @@ jobs:
         run: |
           $tag = if ("${{ inputs.tag }}") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           $version = $tag.TrimStart('v')
-          $packageUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ env.RELEASE_ASSET_NAME }}"
+          $releaseUrl = "https://github.com/${{ github.repository }}/releases/download/$tag"
 
           "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
-          "PACKAGE_URL=$packageUrl" >> $env:GITHUB_ENV
+          "PACKAGE_URL=$releaseUrl/${{ env.RELEASE_ASSET_NAME }}" >> $env:GITHUB_ENV
+          "LEGACY_PACKAGE_URL=$releaseUrl/${{ env.LEGACY_RELEASE_ASSET_NAME }}" >> $env:GITHUB_ENV
 
       - name: Skip when winget token is not configured
         if: env.WINGETCREATE_GITHUB_TOKEN == ''
@@ -124,6 +140,19 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      # Before the new package itself, which fails until its first submission
+      # (made with `wingetcreate new`) has been merged.
+      - name: Submit WinGet manifest update for the legacy id
+        if: env.WINGETCREATE_GITHUB_TOKEN != ''
+        shell: pwsh
+        run: |
+          .\wingetcreate.exe update `
+            --submit `
+            --token $env:WINGETCREATE_GITHUB_TOKEN `
+            --urls $env:LEGACY_PACKAGE_URL `
+            --version $env:PACKAGE_VERSION `
+            $env:LEGACY_WINGET_PACKAGE_ID
 
       - name: Submit WinGet manifest update
         if: env.WINGETCREATE_GITHUB_TOKEN != ''
