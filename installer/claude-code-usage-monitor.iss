@@ -7,7 +7,7 @@
 
 #define MyAppName "Claude Code Usage Monitor"
 #define MyAppPublisher "Hassan Dufer"
-#define MyAppURL "https://github.com/hadufer/Claude-Code-Usage-Monitor"
+#define MyAppURL "https://github.com/hadufer/ai-usage-monitor"
 #define MyAppExeName "claude-code-usage-monitor.exe"
 
 [Setup]

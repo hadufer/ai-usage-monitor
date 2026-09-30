@@ -47,7 +47,7 @@ A taskbar-resident monitor that answers "am I burning too fast, and when does it
 - Pace colours (green / amber / brick red) stay, and the three bands must keep differing in lightness as well as hue, for colour-blind readers.
 - The countdown to reset stays visible without hovering.
 - Provider accents in use today: Claude `#D97757`, Codex black/white by theme, Antigravity `#4285F4`.
-- Fork of CodeZeno/Claude-Code-Usage-Monitor; name "Claude Code Usage Monitor"; MIT.
+- Repository `hadufer/ai-usage-monitor`; app name "Claude Code Usage Monitor"; MIT.
 
 ## Evidence on Hand
 

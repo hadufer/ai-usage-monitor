@@ -1,21 +1,11 @@
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-# Claude Code Usage Monitor
+# AI Usage Monitor
 
-> This is a fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor).
-> The widget is redrawn as an instrument panel: each limit is a tape whose fill
-> is what you used and whose magenta marker is where the clock says you should
-> be, coloured by how fast you are burning the window rather than by the raw
-> percentage. A click opens a panel with every limit, its exact reset time and a
-> warning when you would hit it first; the per-model weekly limit is tracked
-> too, and the widget stays put on multi-monitor machines across session locks.
-> All of it is configurable from the settings file. Everything else is
-> upstream's work.
+<img src=".github/widget.png" width="178" alt="The widget in a dark taskbar: Claude at 62% with 2h10m left, amber because it is ahead of its clock, and Codex at 71% with 3h40m left, red and reversed because it is burning fastest">&nbsp;&nbsp;<img src=".github/widget-day.png" width="178" alt="The same widget in a light taskbar, drawn with the day palette">
 
-<img src=".github/widget.png" width="178" alt="The widget in a dark taskbar: Claude at 62% with 2h10m left, amber because it is ahead of its clock, and Codex at 71% with 3h40m left, red and reversed because it is burning fastest">
-
-<sub>Rendered by the app's own drawing code, with example values.</sub>
+<sub>Rendered by the app's own drawing code, with example values. The widget follows the Windows dark or light setting.</sub>
 
 A lightweight Windows taskbar widget for people already using Claude Code, with optional Codex and Google Antigravity usage display.
 
@@ -28,7 +18,7 @@ It sits in your taskbar and shows how much of your Claude Code, Codex, and/or An
 - A magenta marker on every tape showing **where the clock says you should be**: when the fill runs past it you are burning ahead of the window
 - Tapes coloured by **consumption pace** instead of raw percentage, so 40% used with four hours left reads differently from 40% used with twenty minutes left
 - Click the widget for the **usage panel**: every limit of every provider, its **exact reset time** in your Windows regional format, and a warning when the limit would land before the reset at the current rate
-- The widget stays on one screen: it no longer wanders to another monitor when the session is locked or reattached over RDP
+- The widget stays on one screen: it does not wander to another monitor when the session is locked or reattached over RDP
 - Optional Codex usage bars alongside Claude Code
 - Optional Antigravity model usage bars for Google's 5-hour and weekly Gemini quota windows
 - A live countdown until each limit resets
@@ -65,7 +55,7 @@ winget install hadufer.ClaudeCodeUsageMonitor
 
 That is the recommended way: it installs under your own profile, so it never asks for administrator rights, and `winget upgrade` keeps it current. If WinGet reports `No package found matching input criteria`, run `winget source update` first — your index is older than the package.
 
-If you would rather not use WinGet, download **`claude-code-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/Claude-Code-Usage-Monitor/releases) page and run it. It gives you the same per-user install: a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally the command on your `PATH`. Or take `claude-code-usage-monitor.exe` from the same page, which runs on its own with nothing installed.
+If you would rather not use WinGet, download **`claude-code-usage-monitor-setup.exe`** from the [Releases](https://github.com/hadufer/ai-usage-monitor/releases) page and run it. It gives you the same per-user install: a Start Menu entry, an uninstaller in Add/Remove Programs, and optionally the command on your `PATH`. Or take `claude-code-usage-monitor.exe` from the same page, which runs on its own with nothing installed.
 
 All of them are built by CI from the tagged commit. None are code-signed, so Windows SmartScreen will warn you the first time you run a downloaded exe: choose **More info** then **Run anyway**, or check the SHA256 against the release notes if you prefer.
 
@@ -74,10 +64,6 @@ The installer takes the usual silent switches, if you are deploying it:
 ```powershell
 claude-code-usage-monitor-setup.exe /SILENT /NORESTART
 ```
-
-The upstream package, `CodeZeno.ClaudeCodeUsageMonitor`, is a different one. Both
-provide the same `claude-code-usage-monitor` command, so uninstall one before
-installing the other.
 
 ## Use
 
@@ -115,7 +101,11 @@ Use the right-click **Models** menu to choose what the widget displays:
 
 When multiple models are shown, each gets its own row, marked with a two-letter code: `CL` for Claude, `CX` for Codex, `AG` for Antigravity. Antigravity prefers Google's Gemini quota summary when available and falls back to model quota data when needed.
 
-Providers are listed in one table (`src/providers.rs`) that decides their order, their menu entry and their tray icon, so the widget is no longer wired to exactly three of them. Adding one means adding a table entry, a poller arm, and the few remaining per-provider arms (state storage, row formatting, tray badge colours); the drawing code itself is generic and needs no change.
+<img src=".github/widget-failed.png" width="168" alt="Three rows: Claude at 62%, Codex at 71%, and Antigravity with its code struck through and its value reading -- because it could not be read">&nbsp;&nbsp;<img src=".github/widget-single.png" width="182" alt="Claude shown alone: one row each for the 5h window at 62%, the 7d window at 31% and the per-model Fable limit at 18%">
+
+A provider that could not be read has its code struck through and reads `--`. With Claude shown alone, the widget gives each of its windows a row instead (right).
+
+Providers are listed in one table (`src/providers.rs`) that decides their order, their menu entry and their tray icon, so the widget is not wired to a fixed set of them. Adding one means adding a table entry, a poller arm, and the few remaining per-provider arms (state storage, row formatting, tray badge colours); the drawing code itself is generic and needs no change.
 
 A row is only filled in when that provider actually reported that window. OpenAI's windows are told apart by their length rather than by the key they arrived under: the 5-hour and weekly limits are recognised from `limit_window_seconds`, because `primary_window` and `secondary_window` are positional names and the server has been seen delivering the weekly window as `primary_window`. A row nobody reported reads `--` instead of an invented `0%`, for every provider rather than for OpenAI alone.
 
@@ -126,6 +116,10 @@ The tray icon shows your current 5-hour usage as a percentage badge.
 If multiple providers are enabled, the app shows one tray icon per provider. If only one model is enabled, it shows one tray icon.
 
 Each badge is the widget's boxed 5-hour value at icon size: outlined in amber or red when that window is ahead of its pace, and filled red for the one value most over it. Before the first answer the badge shows the provider's code instead, and the Claude one shows the app icon.
+
+<img src=".github/badges.png" width="280" alt="Tray badges at 16, 20 and 24 pixels, magnified: 62 outlined in amber, 71 filled red, 18 outlined in grey, 100 outlined in red, and CX before Codex's first answer">
+
+<sub>The badges at the 100%, 125% and 150% icon sizes, magnified four times.</sub>
 
 Hovering over a tray icon shows the usage values for that model.
 

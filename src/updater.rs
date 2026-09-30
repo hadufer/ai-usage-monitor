@@ -627,10 +627,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn release_checks_target_this_fork_and_not_upstream() {
+    fn release_checks_target_this_repository() {
         let (owner, repo) = github_repo().expect("repository should be configured");
         assert_eq!(owner, "hadufer");
-        assert_eq!(repo, "Claude-Code-Usage-Monitor");
+        assert_eq!(repo, "ai-usage-monitor");
     }
 
     #[test]
@@ -645,25 +645,25 @@ mod tests {
     #[test]
     fn a_download_url_outside_this_repository_is_refused() {
         assert!(is_own_release_asset(
-            "https://github.com/hadufer/Claude-Code-Usage-Monitor/releases/download/v1.5.4/claude-code-usage-monitor.exe",
+            "https://github.com/hadufer/ai-usage-monitor/releases/download/v1.5.4/claude-code-usage-monitor.exe",
             "hadufer",
-            "Claude-Code-Usage-Monitor"
+            "ai-usage-monitor"
         ));
         // What a tampered or redirected API response would look like.
         assert!(!is_own_release_asset(
-            "https://example.com/hadufer/Claude-Code-Usage-Monitor/releases/download/v1/x.exe",
+            "https://example.com/hadufer/ai-usage-monitor/releases/download/v1/x.exe",
             "hadufer",
-            "Claude-Code-Usage-Monitor"
+            "ai-usage-monitor"
         ));
         assert!(!is_own_release_asset(
-            "https://github.com/someone-else/Claude-Code-Usage-Monitor/releases/download/v1/x.exe",
+            "https://github.com/someone-else/ai-usage-monitor/releases/download/v1/x.exe",
             "hadufer",
-            "Claude-Code-Usage-Monitor"
+            "ai-usage-monitor"
         ));
         assert!(!is_own_release_asset(
-            "http://github.com/hadufer/Claude-Code-Usage-Monitor/releases/download/v1/x.exe",
+            "http://github.com/hadufer/ai-usage-monitor/releases/download/v1/x.exe",
             "hadufer",
-            "Claude-Code-Usage-Monitor"
+            "ai-usage-monitor"
         ));
     }
 

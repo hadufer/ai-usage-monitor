@@ -4,8 +4,8 @@ version = "1.6.0"
 edition = "2021"
 license = "MIT"
 description = "Claude Code Usage Monitor"
-homepage = "https://github.com/hadufer/Claude-Code-Usage-Monitor"
-repository = "https://github.com/hadufer/Claude-Code-Usage-Monitor"
+homepage = "https://github.com/hadufer/ai-usage-monitor"
+repository = "https://github.com/hadufer/ai-usage-monitor"
 
 [package.metadata.winres]
 CompanyName = "Hassan Dufer"
@@ -13,7 +13,6 @@ ProductName = "Claude Code Usage Monitor"
 FileDescription = "Claude Code Usage Monitor"
 OriginalFilename = "claude-code-usage-monitor.exe"
 InternalName = "ClaudeCodeUsageMonitor"
-Comments = "Fork of https://github.com/CodeZeno/Claude-Code-Usage-Monitor"
 LegalCopyright = "Copyright (C) 2025 Craig Constable, (C) 2026 Hassan Dufer"
 
 [dependencies]
