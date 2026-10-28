@@ -391,7 +391,7 @@ What the app reads:
 
 What the app sends over the network:
 
-- Requests to Anthropic's Claude endpoints to read your usage and rate-limit information
+- Requests to Anthropic's Claude endpoints to read your usage and rate-limit information, and to renew an expired Claude Code token
 - Requests to ChatGPT's Codex usage endpoint to read your Codex usage and rate-limit information, if Codex is enabled
 - Requests to Google's Cloud Code / Antigravity endpoints to read your Antigravity quota information, if Antigravity is enabled
 - Requests to GitHub only if you use the app's update check / self-update feature
@@ -420,7 +420,7 @@ What it does **not** do:
 
 Notes:
 
-- If your Claude Code token is expired, the app may ask the local Claude CLI to refresh it in the background
+- If your Windows Claude Code token is expired, the app renews it the way Claude Code does: one request to Anthropic's OAuth token endpoint, no model request, and the new token is written back to `~/.claude/.credentials.json` unless Claude Code renewed it first. A token found only in WSL is still refreshed by the Claude CLI inside that distro
 - If your Codex token is expired, the app may ask the local Codex CLI to refresh it in the background. The monitor does not write `auth.json` itself; any credential update is handled by the Codex CLI.
 - If your Antigravity token is expired, open Antigravity and sign in again. The monitor does not write Windows Credential Manager entries itself.
 - The app can update itself by downloading the latest release from this repository

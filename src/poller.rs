@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -16,6 +16,8 @@ use crate::providers::ProviderId;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+const OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const ANTIGRAVITY_ENDPOINTS: &[&str] = &[
@@ -43,6 +45,15 @@ pub enum CredentialWatchMode {
 }
 
 pub type CredentialWatchSnapshot = Vec<String>;
+
+#[derive(Deserialize)]
+struct OAuthTokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: i64,
+    refresh_token_expires_in: Option<i64>,
+    scope: Option<String>,
+}
 
 #[derive(Deserialize)]
 struct UsageResponse {
@@ -315,63 +326,139 @@ fn refresh_or_fallback(mut creds: Credentials) -> Result<Credentials, PollError>
     }
 }
 
-/// Invoke the Claude CLI with a minimal prompt to force its internal
-/// OAuth token refresh.
 fn cli_refresh_token(source: &CredentialSource) {
     match source {
-        CredentialSource::Windows(_) => cli_refresh_windows_token(),
+        CredentialSource::Windows(path) => oauth_refresh_windows_token(path),
         CredentialSource::Wsl { distro } => cli_refresh_wsl_token(distro),
     }
 }
 
-fn cli_refresh_windows_token() {
-    let claude_path = resolve_windows_claude_path();
-    let is_cmd = claude_path.to_lowercase().ends_with(".cmd");
-    diagnose::log(format!(
-        "attempting Windows Claude token refresh via {claude_path}"
-    ));
+/// Renew the token the way Claude Code does, with one request to the OAuth
+/// endpoint. The former `claude -p .` sent a full model turn every eight hours.
+fn oauth_refresh_windows_token(path: &Path) {
+    diagnose::log("attempting Windows Claude token refresh via the OAuth endpoint");
 
-    let args: &[&str] = &["-p", "."];
-
-    let mut cmd = if is_cmd {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/c").arg(&claude_path).args(args);
-        c
-    } else {
-        let mut c = Command::new(&claude_path);
-        c.args(args);
-        c
+    let Some(posted) = read_credentials_json(path) else {
+        diagnose::log("unable to read Windows credentials before the token refresh");
+        return;
     };
-    cmd.env_remove("CLAUDECODE")
-        .env_remove("CLAUDE_CODE_ENTRYPOINT")
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    let Some(request) = oauth_refresh_request(&posted) else {
+        diagnose::log("Windows credentials have no refresh token or scopes");
+        return;
+    };
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
+    let Ok(agent) = build_agent() else {
+        return;
+    };
+    let refreshed: OAuthTokenResponse = match agent.post(OAUTH_TOKEN_URL).send_json(&request) {
+        Ok(resp) => match resp.into_json() {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                diagnose::log_error("unreadable OAuth token refresh response", error);
+                return;
+            }
+        },
+        Err(ureq::Error::Status(code, _)) => {
+            diagnose::log(format!("OAuth token refresh returned status {code}"));
+            return;
+        }
         Err(error) => {
-            diagnose::log_error("unable to spawn Windows Claude token refresh", error);
+            diagnose::log_error("OAuth token refresh request failed", error);
             return;
         }
     };
 
-    // Wait up to 30 seconds — don't block the poll thread forever
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if start.elapsed() > Duration::from_secs(30) {
-                    let _ = child.kill();
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-            Err(_) => break,
-        }
+    // Claude Code may have renewed the token meanwhile: never overwrite its newer one.
+    let Some(mut current) = read_credentials_json(path) else {
+        return;
+    };
+    if refresh_token_of(&current) != refresh_token_of(&posted) {
+        diagnose::log("Windows credentials were renewed by another process meanwhile");
+        return;
     }
+    if apply_refreshed_tokens(&mut current, &refreshed, now_millis()).is_none() {
+        return;
+    }
+    if let Err(error) = write_credentials_json(path, &current) {
+        diagnose::log_error("unable to write the refreshed Windows credentials", error);
+    }
+}
+
+fn read_credentials_json(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn write_credentials_json(path: &Path, credentials: &serde_json::Value) -> std::io::Result<()> {
+    let staging = path.with_extension("json.refresh");
+    let written = std::fs::write(&staging, serde_json::to_string_pretty(credentials)?)
+        .and_then(|()| std::fs::rename(&staging, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&staging);
+    }
+    written
+}
+
+fn refresh_token_of(credentials: &serde_json::Value) -> Option<&str> {
+    credentials
+        .get("claudeAiOauth")?
+        .get("refreshToken")?
+        .as_str()
+}
+
+fn oauth_refresh_request(credentials: &serde_json::Value) -> Option<serde_json::Value> {
+    let oauth = credentials.get("claudeAiOauth")?;
+    let scope = oauth
+        .get("scopes")?
+        .as_array()?
+        .iter()
+        .filter_map(|scope| scope.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let client_id = oauth
+        .get("clientId")
+        .and_then(|v| v.as_str())
+        .unwrap_or(CLAUDE_CODE_CLIENT_ID);
+
+    Some(serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token_of(credentials)?,
+        "client_id": client_id,
+        "scope": scope,
+    }))
+}
+
+fn apply_refreshed_tokens(
+    credentials: &mut serde_json::Value,
+    refreshed: &OAuthTokenResponse,
+    now_ms: i64,
+) -> Option<()> {
+    let oauth = credentials.get_mut("claudeAiOauth")?.as_object_mut()?;
+    oauth.insert("accessToken".into(), refreshed.access_token.clone().into());
+    oauth.insert(
+        "expiresAt".into(),
+        (now_ms + refreshed.expires_in * 1000).into(),
+    );
+    if let Some(token) = &refreshed.refresh_token {
+        oauth.insert("refreshToken".into(), token.clone().into());
+    }
+    if let Some(secs) = refreshed.refresh_token_expires_in {
+        oauth.insert(
+            "refreshTokenExpiresAt".into(),
+            (now_ms + secs * 1000).into(),
+        );
+    }
+    if let Some(scope) = &refreshed.scope {
+        let scopes: Vec<&str> = scope.split_whitespace().collect();
+        oauth.insert("scopes".into(), scopes.into());
+    }
+    Some(())
+}
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 fn cli_refresh_wsl_token(distro: &str) {
@@ -484,42 +571,6 @@ fn wait_for_refresh(child: &mut std::process::Child) {
             Err(_) => break,
         }
     }
-}
-
-/// Resolve the full path to the `claude` CLI executable.
-fn resolve_windows_claude_path() -> String {
-    for name in &["claude.cmd", "claude"] {
-        if Command::new(name)
-            .arg("--version")
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok()
-        {
-            return name.to_string();
-        }
-    }
-
-    for name in &["claude.cmd", "claude"] {
-        if let Ok(output) = Command::new("where.exe")
-            .arg(name)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = stdout.lines().next() {
-                    let path = first_line.trim().to_string();
-                    if !path.is_empty() {
-                        return path;
-                    }
-                }
-            }
-        }
-    }
-
-    "claude.cmd".to_string()
 }
 
 fn resolve_windows_codex_path() -> String {
@@ -1616,11 +1667,7 @@ fn looks_like_utf16le(bytes: &[u8]) -> bool {
 
 fn is_token_expired(expires_at: Option<i64>) -> bool {
     let Some(exp) = expires_at else { return false };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-    now >= exp
+    now_millis() >= exp
 }
 
 /// Parse an ISO 8601 timestamp string into a SystemTime.
@@ -1848,6 +1895,108 @@ mod tests {
 
     fn english() -> Strings {
         crate::localization::LanguageId::English.strings()
+    }
+
+    fn stored_credentials() -> serde_json::Value {
+        serde_json::json!({
+            "mcpOAuth": {"jira": {"accessToken": "mcp"}},
+            "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "expiresAt": 1,
+                "refreshTokenExpiresAt": 2,
+                "scopes": ["user:inference", "user:profile"],
+                "subscriptionType": "team",
+                "rateLimitTier": "default_claude_max_5x"
+            }
+        })
+    }
+
+    /// The request mirrors Claude Code's own refresh, so the server grants the same token.
+    #[test]
+    fn the_refresh_request_reuses_the_stored_token_and_scopes() {
+        let request = oauth_refresh_request(&stored_credentials()).unwrap();
+
+        assert_eq!(request["grant_type"], "refresh_token");
+        assert_eq!(request["refresh_token"], "old-refresh");
+        assert_eq!(request["client_id"], CLAUDE_CODE_CLIENT_ID);
+        assert_eq!(request["scope"], "user:inference user:profile");
+    }
+
+    #[test]
+    fn no_refresh_request_without_a_refresh_token() {
+        let mut credentials = stored_credentials();
+        credentials["claudeAiOauth"]
+            .as_object_mut()
+            .unwrap()
+            .remove("refreshToken");
+
+        assert!(oauth_refresh_request(&credentials).is_none());
+    }
+
+    /// Claude Code and its MCP logins share the file: only the renewed fields may change.
+    #[test]
+    fn the_refreshed_tokens_replace_only_the_renewed_fields() {
+        let mut credentials = stored_credentials();
+        let refreshed = OAuthTokenResponse {
+            access_token: "new-access".into(),
+            refresh_token: Some("new-refresh".into()),
+            expires_in: 28_800,
+            refresh_token_expires_in: None,
+            scope: None,
+        };
+
+        apply_refreshed_tokens(&mut credentials, &refreshed, 1_000).unwrap();
+
+        let oauth = &credentials["claudeAiOauth"];
+        assert_eq!(oauth["accessToken"], "new-access");
+        assert_eq!(oauth["refreshToken"], "new-refresh");
+        assert_eq!(oauth["expiresAt"], 28_801_000);
+        assert_eq!(oauth["refreshTokenExpiresAt"], 2);
+        assert_eq!(
+            oauth["scopes"],
+            serde_json::json!(["user:inference", "user:profile"])
+        );
+        assert_eq!(oauth["subscriptionType"], "team");
+        assert_eq!(oauth["rateLimitTier"], "default_claude_max_5x");
+        assert_eq!(credentials["mcpOAuth"]["jira"]["accessToken"], "mcp");
+    }
+
+    /// A server that does not rotate the refresh token leaves the stored one usable.
+    #[test]
+    fn the_stored_refresh_token_stays_when_the_server_keeps_it() {
+        let mut credentials = stored_credentials();
+        let refreshed = OAuthTokenResponse {
+            access_token: "new-access".into(),
+            refresh_token: None,
+            expires_in: 60,
+            refresh_token_expires_in: Some(120),
+            scope: Some("user:inference user:profile user:plugins".into()),
+        };
+
+        apply_refreshed_tokens(&mut credentials, &refreshed, 0).unwrap();
+
+        let oauth = &credentials["claudeAiOauth"];
+        assert_eq!(oauth["refreshToken"], "old-refresh");
+        assert_eq!(oauth["refreshTokenExpiresAt"], 120_000);
+        assert_eq!(
+            oauth["scopes"],
+            serde_json::json!(["user:inference", "user:profile", "user:plugins"])
+        );
+    }
+
+    #[test]
+    fn the_credentials_file_round_trips_through_the_staging_write() {
+        let dir = std::env::temp_dir().join(format!("aum-cred-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".credentials.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        write_credentials_json(&path, &stored_credentials()).unwrap();
+
+        assert_eq!(read_credentials_json(&path).unwrap(), stored_credentials());
+        assert!(!path.with_extension("json.refresh").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     const COUNTDOWN_PROBES: [u64; 12] = [
